@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: canalco-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-canalco}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-canalco}
+      POSTGRES_DB: ${POSTGRES_DB:-canalco}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - canalco-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-canalco}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - canalco-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: canalco-backend
+    restart: unless-stopped
+    environment:
+      - CANALCO_DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-canalco}:${POSTGRES_PASSWORD:-canalco}@postgres:5432/${POSTGRES_DB:-canalco}
+      - CANALCO_JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - CANALCO_ENV=${CANALCO_ENV:-development}
+      - CANALCO_DEBUG=${DEBUG:-false}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    networks:
+      - canalco-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()"]
+      interval: 30s
+      timeout: 3s
+      start_period: 40s
+      retries: 3
+
+volumes:
+  canalco-postgres-data:
+    driver: local
+
+networks:
+  canalco-network:
+    driver: bridge
