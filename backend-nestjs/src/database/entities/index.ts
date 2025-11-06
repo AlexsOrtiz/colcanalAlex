@@ -16,3 +16,9 @@ export { RequisitionPrefix } from './requisition-prefix.entity';
 export { RequisitionSequence } from './requisition-sequence.entity';
 export { MaterialGroup } from './material-group.entity';
 export { Material } from './material.entity';
+
+// Requisitions entities
+export { Requisition } from './requisition.entity';
+export { RequisitionItem } from './requisition-item.entity';
+export { RequisitionStatus } from './requisition-status.entity';
+export { RequisitionLog } from './requisition-log.entity';
