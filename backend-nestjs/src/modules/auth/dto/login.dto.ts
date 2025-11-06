@@ -3,20 +3,27 @@ import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
 
 export class LoginDto {
   @ApiProperty({
+    description:
+      'Correo electrónico corporativo. Solo se permiten dominios @canalco.com y @alumbrado.com',
     example: 'admin@canalco.com',
-    description: 'Corporate email address (must be @canalco.com)',
+    type: String,
+    required: true,
+    format: 'email',
   })
-  @IsEmail()
-  @IsNotEmpty()
+  @IsEmail({}, { message: 'Debe proporcionar un correo electrónico válido' })
+  @IsNotEmpty({ message: 'El correo electrónico es obligatorio' })
   email: string;
 
   @ApiProperty({
-    example: 'admin123',
-    description: 'User password (minimum 6 characters)',
+    description:
+      'Contraseña del usuario. Debe tener al menos 6 caracteres',
+    example: 'Canalco2025!',
+    type: String,
+    required: true,
     minLength: 6,
   })
   @IsString()
-  @IsNotEmpty()
-  @MinLength(6)
+  @IsNotEmpty({ message: 'La contraseña es obligatoria' })
+  @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })
   password: string;
 }
