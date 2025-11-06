@@ -21,7 +21,7 @@ export class Material {
   @Column({ name: 'group_id' })
   groupId: number;
 
-  @ManyToOne(() => MaterialGroup, (group) => group.materials)
+  @ManyToOne(() => MaterialGroup, (materialGroup) => materialGroup.materials)
   @JoinColumn({ name: 'group_id' })
-  group: MaterialGroup;
+  materialGroup: MaterialGroup;
 }

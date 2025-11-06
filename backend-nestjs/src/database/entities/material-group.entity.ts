@@ -9,6 +9,6 @@ export class MaterialGroup {
   @Column({ type: 'text', unique: true })
   name: string;
 
-  @OneToMany(() => Material, (material) => material.group)
+  @OneToMany(() => Material, (material) => material.materialGroup)
   materials: Material[];
 }
