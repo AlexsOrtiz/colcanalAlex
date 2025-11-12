@@ -1,6 +1,6 @@
-import { IsOptional, IsString, IsNumber, IsDateString } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsDateString, IsNumber } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class FilterRequisitionsDto {
   @ApiProperty({
@@ -12,9 +12,9 @@ export class FilterRequisitionsDto {
     minimum: 1,
   })
   @IsOptional()
-  @IsNumber({}, { message: 'El número de página debe ser un número válido' })
   @Type(() => Number)
-  page?: number = 1;
+  @IsNumber()
+  page?: number;
 
   @ApiProperty({
     description:
@@ -27,9 +27,9 @@ export class FilterRequisitionsDto {
     maximum: 100,
   })
   @IsOptional()
-  @IsNumber({}, { message: 'El límite debe ser un número válido' })
   @Type(() => Number)
-  limit?: number = 10;
+  @IsNumber()
+  limit?: number;
 
   @ApiProperty({
     description:
@@ -81,7 +81,7 @@ export class FilterRequisitionsDto {
     required: false,
   })
   @IsOptional()
-  @IsNumber({}, { message: 'El projectId debe ser un número válido' })
   @Type(() => Number)
+  @IsNumber()
   projectId?: number;
 }

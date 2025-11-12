@@ -13,8 +13,12 @@ export const dataSourceOptions: DataSourceOptions = {
   database: process.env.DB_DATABASE || 'canalco',
   entities: Object.values(entities),
   migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
-  synchronize: false,
+  synchronize: true, // ⚠️ TEMPORAL - Cambiado a true para crear tablas iniciales
   logging: process.env.NODE_ENV === 'development',
+  extra: {
+    // Configurar zona horaria de Colombia en PostgreSQL
+    timezone: 'America/Bogota',
+  },
 };
 
 const dataSource = new DataSource(dataSourceOptions);

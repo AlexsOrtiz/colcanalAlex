@@ -20,6 +20,9 @@ export class Role {
   @Column({ name: 'descripcion', type: 'text', nullable: true })
   descripcion: string;
 
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  category: string;
+
   @Column({
     name: 'default_module',
     type: 'varchar',

@@ -18,6 +18,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { GetUser } from '../../common/decorators/get-user.decorator';
@@ -30,6 +31,10 @@ import {
   ApproveRequisitionDto,
   RejectRequisitionDto,
 } from './dto/approve-requisition.dto';
+import { ManageQuotationDto } from './dto/manage-quotation.dto';
+import { CreatePurchaseOrdersDto } from './dto/create-purchase-orders.dto';
+import { CreateMaterialReceiptDto } from './dto/create-material-receipt.dto';
+import { UpdateMaterialReceiptDto } from './dto/update-material-receipt.dto';
 import { User } from '../../database/entities/user.entity';
 
 @ApiTags('Purchases - Requisitions')
@@ -291,6 +296,87 @@ export class PurchasesController {
     return this.purchasesService.getPendingActions(user.userId, filters);
   }
 
+  // ========================
+  // Quotation Endpoints (MUST be before :id route)
+  // ========================
+
+  @Get('for-quotation')
+  @ApiOperation({
+    summary: 'Listar requisiciones listas para cotización (Compras)',
+    description: `
+    Retorna todas las requisiciones aprobadas por gerencia que están listas para asignar cotizaciones.
+
+    ## ¿Quién puede usar este endpoint?
+
+    Solo usuarios con **rol Compras** pueden acceder a este endpoint.
+
+    ## ¿Qué requisiciones se muestran?
+
+    - Requisiciones en estado **"aprobada_gerencia"**
+    - Ordenadas por fecha de creación (más antiguas primero)
+    - Incluye todos los ítems con sus materiales
+
+    ## Características
+
+    - **Paginación**: Usa \`page\` y \`limit\` para navegar por páginas
+    - **Datos completos**: Incluye empresa, proyecto, creador, ítems
+    `,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de requisiciones retornada exitosamente',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No tiene permisos. Solo el rol Compras puede acceder.',
+  })
+  async getRequisitionsForQuotation(
+    @GetUser() user: User,
+    @Query() filters: FilterRequisitionsDto,
+  ) {
+    return this.purchasesService.getRequisitionsForQuotation(
+      user.userId,
+      filters,
+    );
+  }
+
+  @Get('my-pending-receipts')
+  @ApiOperation({
+    summary: 'Listar mis requisiciones pendientes de recepción',
+    description: `
+    Retorna todas las requisiciones creadas por el usuario que están pendientes de recibir materiales.
+
+    ## ¿Quién puede usar este endpoint?
+
+    Solo el **creador de la requisición** puede ver sus propias requisiciones pendientes.
+
+    ## ¿Qué requisiciones se muestran?
+
+    - Requisiciones en estado **"pendiente_recepcion"** (sin recepciones aún)
+    - Requisiciones en estado **"en_recepcion"** (con recepciones parciales)
+
+    ## Información incluida
+
+    - Datos completos de la requisición
+    - Órdenes de compra con proveedores
+    - Ítems con:
+      - Cantidad ordenada
+      - Cantidad recibida (suma de todas las recepciones)
+      - Cantidad pendiente
+      - Lista de recepciones realizadas
+    `,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de requisiciones pendientes retornada exitosamente',
+  })
+  async getMyPendingReceipts(
+    @GetUser() user: User,
+    @Query() filters: FilterRequisitionsDto,
+  ) {
+    return this.purchasesService.getMyPendingReceipts(user.userId, filters);
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Obtener detalle de requisición',
@@ -461,6 +547,38 @@ export class PurchasesController {
     );
   }
 
+  @Get(':id/item-approvals')
+  @ApiOperation({
+    summary: 'Obtener aprobaciones de ítems previas',
+    description:
+      'Permite obtener las aprobaciones previas a nivel de ítem para una requisición. Útil para pre-cargar decisiones cuando se revisa/aprueba una requisición nuevamente.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiQuery({
+    name: 'approvalLevel',
+    description: 'Nivel de aprobación a filtrar (reviewer o management)',
+    required: false,
+    enum: ['reviewer', 'management'],
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de aprobaciones de ítems',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Requisición no encontrada',
+  })
+  async getItemApprovals(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('approvalLevel') approvalLevel?: 'reviewer' | 'management',
+  ) {
+    return this.purchasesService.getItemApprovals(id, approvalLevel);
+  }
+
   @Post(':id/reject')
   @ApiOperation({
     summary: 'Rechazar requisición (Gerencia)',
@@ -498,5 +616,690 @@ export class PurchasesController {
       user.userId,
       rejectDto,
     );
+  }
+
+  // ========================
+  // Quotation Endpoints (parameterized)
+  // ========================
+
+  @Get(':id/quotation')
+  @ApiOperation({
+    summary: 'Obtener detalle de requisición con cotizaciones (Compras)',
+    description: `
+    Retorna el detalle completo de una requisición con su información de cotización actual.
+
+    ## ¿Quién puede usar este endpoint?
+
+    Solo usuarios con **rol Compras** pueden acceder a este endpoint.
+
+    ## ¿Qué información retorna?
+
+    - Datos completos de la requisición
+    - Ítems con sus materiales
+    - **Cotizaciones activas** (última versión) de cada ítem:
+      - Acción asignada (cotizar / no_requiere)
+      - Proveedores asignados (si aplica)
+      - Justificación (si no requiere cotización)
+      - Observaciones
+
+    ## Estados válidos
+
+    Solo se puede consultar si la requisición está en estado:
+    - \`aprobada_gerencia\` (lista para cotizar)
+    - \`en_cotizacion\` (en proceso de asignación)
+    - \`cotizada\` (cotización completa, permite editar antes de crear orden)
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Detalle de requisición con cotizaciones retornado exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'La requisición no está disponible para cotización',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No tiene permisos. Solo el rol Compras puede acceder.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Requisición no encontrada',
+  })
+  async getRequisitionQuotation(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.purchasesService.getRequisitionQuotation(id, user.userId);
+  }
+
+  @Post(':id/quotation')
+  @ApiOperation({
+    summary: 'Gestionar cotizaciones de una requisición (Compras)',
+    description: `
+    Permite asignar proveedores y acciones a los ítems de una requisición.
+
+    ## ¿Quién puede usar este endpoint?
+
+    Solo usuarios con **rol Compras** pueden acceder a este endpoint.
+
+    ## ¿Qué hace este endpoint?
+
+    - Asigna acción (\`cotizar\` o \`no_requiere\`) a cada ítem
+    - Permite hasta **2 proveedores** por ítem
+    - Implementa **versionamiento automático** al cambiar proveedores
+    - Cambia estado a \`en_cotizacion\` automáticamente
+    - Cambia a \`cotizada\` cuando **todos los ítems** tienen acción asignada
+
+    ## Estados válidos
+
+    Solo se puede gestionar si la requisición está en estado:
+    - \`aprobada_gerencia\` (primera asignación)
+    - \`en_cotizacion\` (modificar asignaciones parciales)
+    - \`cotizada\` (modificar cotizaciones completas antes de crear orden)
+
+    ## Ejemplo de request
+
+    \`\`\`json
+    {
+      "items": [
+        {
+          "itemId": 1,
+          "action": "cotizar",
+          "suppliers": [
+            {
+              "supplierId": 3,
+              "supplierOrder": 1,
+              "observations": "Solicitar entrega en 5 días"
+            },
+            {
+              "supplierId": 7,
+              "supplierOrder": 2,
+              "observations": "Proveedor alternativo"
+            }
+          ]
+        },
+        {
+          "itemId": 2,
+          "action": "no_requiere",
+          "justification": "Material disponible en inventario"
+        }
+      ]
+    }
+    \`\`\`
+
+    ## Versionamiento
+
+    - Al cambiar proveedores de un ítem, se crea una **nueva versión**
+    - Las versiones anteriores se marcan como \`isActive: false\`
+    - Siempre se retorna solo la versión activa más reciente
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Cotizaciones actualizadas exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Datos inválidos o requisición no disponible para cotización',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No tiene permisos. Solo el rol Compras puede acceder.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Requisición no encontrada',
+  })
+  async manageQuotation(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() manageQuotationDto: ManageQuotationDto,
+  ) {
+    return this.purchasesService.manageQuotation(
+      id,
+      user.userId,
+      manageQuotationDto,
+    );
+  }
+
+  // ============================================
+  // ASIGNAR PRECIOS A COTIZACIONES
+  // ============================================
+
+  @Post(':id/assign-prices')
+  @ApiOperation({
+    summary: 'Asignar precios a las cotizaciones de una requisición',
+    description: `
+    Permite a Compras ingresar los precios unitarios, IVA y descuentos para cada ítem cotizado.
+
+    ## Flujo
+
+    1. Valida que la requisición esté en estado "cotizada"
+    2. Verifica que no existan órdenes de compra ya creadas
+    3. Guarda los precios en las cotizaciones seleccionadas
+    4. Si hay múltiples proveedores por ítem, marca el seleccionado
+
+    ## Características
+
+    - Solo se asignan precios a ítems con action='cotizar'
+    - Los ítems con action='no_requiere' no necesitan precio
+    - El precio se guarda SIN IVA, el IVA se calcula al crear la orden
+    - Permite modificar precios hasta que se cree la orden de compra
+
+    ## Ejemplo de request
+
+    \`\`\`json
+    {
+      "items": [
+        {
+          "itemId": 1,
+          "quotationId": 5,
+          "unitPrice": 150000,
+          "hasIva": true,
+          "discount": 5000
+        },
+        {
+          "itemId": 2,
+          "quotationId": 8,
+          "unitPrice": 80000,
+          "hasIva": false,
+          "discount": 0
+        }
+      ]
+    }
+    \`\`\`
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Precios asignados exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Datos inválidos o requisición no disponible',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Requisición no encontrada',
+  })
+  async assignPrices(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() assignPricesDto: any, // AssignPricesDto
+  ) {
+    return this.purchasesService.assignPrices(id, user.userId, assignPricesDto);
+  }
+
+  // ============================================
+  // CREAR ÓRDENES DE COMPRA
+  // ============================================
+
+  @Post(':id/purchase-orders')
+  @ApiOperation({
+    summary: 'Crear órdenes de compra para una requisición cotizada',
+    description: `
+    Genera una o más órdenes de compra a partir de una requisición en estado "cotizada".
+
+    ## Flujo
+
+    1. Valida que la requisición esté en estado "cotizada"
+    2. Agrupa automáticamente los ítems por proveedor
+    3. Genera una orden de compra por cada proveedor con numeración automática
+    4. Cambia el estado de la requisición a "pendiente_recepcion"
+    5. Registra el log de la acción
+
+    ## Numeración automática
+
+    - Formato: \`{código}-{tipo}-{consecutivo}\`
+    - **Código**: Código del centro de operación (ej: 001, 002, 960, 961)
+    - **Tipo**: "OC" si el nombre de la empresa contiene "Unión Temporal", sino "OS"
+    - **Consecutivo**: Número secuencial de 4 dígitos por centro de operación
+    - Ejemplos: \`001-OC-0001\`, \`960-OS-0088\`
+
+    ## Cálculos
+
+    - **Subtotal**: cantidad × precio unitario
+    - **IVA**: subtotal × 19% (si hasIVA es true)
+    - **Total ítem**: subtotal + IVA - descuento
+    - Los totales se calculan automáticamente por orden
+
+    ## Ejemplo de request
+
+    \`\`\`json
+    {
+      "issueDate": "2025-11-06",
+      "items": [
+        {
+          "itemId": 1,
+          "supplierId": 3,
+          "unitPrice": 50000,
+          "hasIVA": true,
+          "discount": 5000
+        },
+        {
+          "itemId": 2,
+          "supplierId": 3,
+          "unitPrice": 25000,
+          "hasIVA": false,
+          "discount": 0
+        },
+        {
+          "itemId": 3,
+          "supplierId": 5,
+          "unitPrice": 120000,
+          "hasIVA": true,
+          "discount": 10000
+        }
+      ]
+    }
+    \`\`\`
+
+    En este ejemplo se generarán 2 órdenes de compra:
+    - Una para el proveedor 3 con los ítems 1 y 2
+    - Una para el proveedor 5 con el ítem 3
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición cotizada',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Órdenes de compra creadas exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Requisición no está en estado "cotizada" o datos inválidos',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Requisición no encontrada',
+  })
+  async createPurchaseOrders(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() createPurchaseOrdersDto: CreatePurchaseOrdersDto,
+  ) {
+    return this.purchasesService.createPurchaseOrders(
+      id,
+      user.userId,
+      createPurchaseOrdersDto,
+    );
+  }
+
+  // ============================================
+  // MATERIAL RECEIPTS - RECEPCIÓN DE MATERIALES
+  // ============================================
+
+  @Get(':id/receipts')
+  @ApiOperation({
+    summary: 'Ver recepciones de una requisición',
+    description: `
+    Retorna el detalle completo de una requisición con todas sus recepciones de materiales.
+
+    ## Permisos
+
+    Solo el **creador de la requisición** puede ver sus recepciones.
+
+    ## Estados válidos
+
+    - \`pendiente_recepcion\`: Sin recepciones aún
+    - \`en_recepcion\`: Con recepciones parciales
+    - \`recepcion_completa\`: Todos los materiales recibidos
+
+    ## Información retornada
+
+    - Datos de la requisición
+    - Órdenes de compra con ítems
+    - Para cada ítem:
+      - Cantidad ordenada
+      - Cantidad recibida
+      - Cantidad pendiente
+      - Lista detallada de recepciones (fecha, cantidad, observaciones, quién recibió)
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Recepciones retornadas exitosamente',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No tiene permiso para ver las recepciones de esta requisición',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'La requisición no está en proceso de recepción',
+  })
+  async getRequisitionReceipts(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.purchasesService.getRequisitionReceipts(id, user.userId);
+  }
+
+  @Post(':id/receipts')
+  @ApiOperation({
+    summary: 'Registrar recepción de materiales',
+    description: `
+    Permite registrar la recepción de uno o más ítems de una requisición.
+
+    ## Permisos
+
+    Solo el **creador de la requisición** puede registrar recepciones.
+
+    ## Flujo
+
+    1. Valida que la requisición esté en estado válido (\`pendiente_recepcion\` o \`en_recepcion\`)
+    2. Valida que cada ítem pertenezca a la requisición
+    3. Calcula cantidad pendiente vs recibida
+    4. Si hay sobreentrega, **requiere justificación obligatoria**
+    5. Crea las recepciones
+    6. Actualiza estado automáticamente:
+       - Si quedan ítems pendientes → \`en_recepcion\`
+       - Si todos los ítems están completos → \`recepcion_completa\`
+
+    ## Recepciones parciales
+
+    ✅ Permitidas: Puedes recibir 5 de 10, luego 3 más, luego 2 más
+
+    ## Sobreentrega
+
+    ✅ Permitida con justificación: Si ordenaste 10 pero llegaron 12, debes justificar
+
+    ## Ejemplo de request
+
+    \`\`\`json
+    {
+      "items": [
+        {
+          "poItemId": 1,
+          "quantityReceived": 5,
+          "receivedDate": "2025-11-06",
+          "observations": "Material en buen estado"
+        },
+        {
+          "poItemId": 2,
+          "quantityReceived": 12,
+          "receivedDate": "2025-11-06",
+          "overdeliveryJustification": "Proveedor envió de más por error",
+          "observations": "2 unidades extra recibidas"
+        }
+      ]
+    }
+    \`\`\`
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Recepción registrada exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Datos inválidos o sobreentrega sin justificación',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el creador puede registrar recepciones',
+  })
+  async createMaterialReceipts(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() createMaterialReceiptDto: CreateMaterialReceiptDto,
+  ) {
+    return this.purchasesService.createMaterialReceipts(
+      id,
+      user.userId,
+      createMaterialReceiptDto,
+    );
+  }
+
+  @Patch(':id/receipts/:receiptId')
+  @ApiOperation({
+    summary: 'Actualizar una recepción de material',
+    description: `
+    Permite corregir los datos de una recepción ya registrada.
+
+    ## Permisos
+
+    Solo el **creador de la requisición** puede editar recepciones.
+
+    ## ¿Qué se puede actualizar?
+
+    - Cantidad recibida
+    - Fecha de recepción
+    - Observaciones
+    - Justificación de sobreentrega
+
+    ## Validaciones
+
+    - Si la nueva cantidad genera sobreentrega, requiere justificación
+    - Recalcula automáticamente el estado de la requisición
+
+    ## Ejemplo
+
+    \`\`\`json
+    {
+      "quantityReceived": 8,
+      "observations": "Cantidad corregida después de reconteo"
+    }
+    \`\`\`
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiParam({
+    name: 'receiptId',
+    description: 'ID de la recepción a actualizar',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Recepción actualizada exitosamente',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el creador puede editar recepciones',
+  })
+  async updateMaterialReceipt(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('receiptId', ParseIntPipe) receiptId: number,
+    @Body() updateMaterialReceiptDto: UpdateMaterialReceiptDto,
+  ) {
+    return this.purchasesService.updateMaterialReceipt(
+      id,
+      receiptId,
+      user.userId,
+      updateMaterialReceiptDto,
+    );
+  }
+
+  // ============================================
+  // CONSULTAR ÓRDENES DE COMPRA
+  // ============================================
+
+  @Get('purchase-orders')
+  @ApiOperation({
+    summary: 'Listar todas las órdenes de compra',
+    description: `
+    Obtiene un listado paginado de todas las órdenes de compra generadas.
+
+    ## Filtros opcionales
+
+    - **requisitionId**: Filtrar por requisición
+    - **supplierId**: Filtrar por proveedor
+    - **fromDate / toDate**: Filtrar por rango de fechas de emisión
+    - **page / limit**: Paginación
+
+    ## Ejemplo
+
+    GET /purchases/purchase-orders?page=1&limit=10&supplierId=3
+
+    ## Respuesta
+
+    Incluye información completa de cada orden:
+    - Datos de la requisición asociada
+    - Información del proveedor
+    - Usuario que creó la orden
+    - Lista de ítems con materiales
+    - Totales calculados
+    `,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de órdenes de compra obtenida exitosamente',
+  })
+  async getAllPurchaseOrders(
+    @GetUser() user: User,
+    @Query('page', ParseIntPipe) page: number = 1,
+    @Query('limit', ParseIntPipe) limit: number = 10,
+    @Query('requisitionId') requisitionId?: string,
+    @Query('supplierId') supplierId?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    const filters: any = {};
+
+    if (requisitionId) {
+      filters.requisitionId = parseInt(requisitionId);
+    }
+
+    if (supplierId) {
+      filters.supplierId = parseInt(supplierId);
+    }
+
+    if (fromDate) {
+      filters.fromDate = fromDate;
+    }
+
+    if (toDate) {
+      filters.toDate = toDate;
+    }
+
+    return this.purchasesService.getPurchaseOrders(
+      user.userId,
+      page,
+      limit,
+      filters,
+    );
+  }
+
+  @Get('purchase-orders/:id')
+  @ApiOperation({
+    summary: 'Ver detalle de una orden de compra',
+    description: `
+    Obtiene el detalle completo de una orden de compra específica.
+
+    ## Información incluida
+
+    - **Orden de compra**: Número, fecha, totales
+    - **Requisición**: Número, empresa, proyecto, estado
+    - **Proveedor**: Nombre, NIT, contacto
+    - **Creador**: Usuario que generó la orden
+    - **Ítems**:
+      - Material (código, nombre, unidad)
+      - Cantidad, precio unitario
+      - Subtotal, IVA, descuento, total
+      - Cotización asociada
+
+    ## Ejemplo
+
+    GET /purchases/purchase-orders/1
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la orden de compra',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Detalle de la orden de compra obtenido exitosamente',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Orden de compra no encontrada',
+  })
+  async getPurchaseOrderDetail(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.purchasesService.getPurchaseOrderById(id);
+  }
+
+  @Get(':id/purchase-orders')
+  @ApiOperation({
+    summary: 'Ver órdenes de compra de una requisición',
+    description: `
+    Obtiene todas las órdenes de compra generadas para una requisición específica.
+
+    ## Información incluida
+
+    - **Datos de la requisición**: Número, estado
+    - **Lista de órdenes de compra**:
+      - Número de orden
+      - Proveedor
+      - Fecha de emisión
+      - Ítems con materiales
+      - Totales (subtotal, IVA, descuentos, total)
+
+    ## Uso típico
+
+    Mostrar todas las OCs generadas desde el detalle de una requisición.
+
+    ## Ejemplo
+
+    GET /purchases/requisitions/5/purchase-orders
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la requisición',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Órdenes de compra de la requisición obtenidas exitosamente',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Requisición no encontrada',
+  })
+  async getPurchaseOrdersByRequisition(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.purchasesService.getPurchaseOrdersByRequisition(id, user.userId);
   }
 }

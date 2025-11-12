@@ -17,6 +17,8 @@ import { RequisitionStatus } from '../entities/requisition-status.entity';
 import { MaterialGroup } from '../entities/material-group.entity';
 import { Material } from '../entities/material.entity';
 import { Authorization } from '../entities/authorization.entity';
+import { Supplier } from '../entities/supplier.entity';
+import { RequisitionItemQuotation } from '../entities/requisition-item-quotation.entity';
 
 config();
 
@@ -51,6 +53,9 @@ async function seed() {
       'TRUNCATE TABLE "autorizaciones" RESTART IDENTITY CASCADE',
     );
     await dataSource.query(
+      'TRUNCATE TABLE "requisition_approvals" RESTART IDENTITY CASCADE',
+    );
+    await dataSource.query(
       'TRUNCATE TABLE "requisition_logs" RESTART IDENTITY CASCADE',
     );
     await dataSource.query(
@@ -58,6 +63,9 @@ async function seed() {
     );
     await dataSource.query(
       'TRUNCATE TABLE "requisitions" RESTART IDENTITY CASCADE',
+    );
+    await dataSource.query(
+      'TRUNCATE TABLE "suppliers" RESTART IDENTITY CASCADE',
     );
     await dataSource.query(
       'TRUNCATE TABLE "materials" RESTART IDENTITY CASCADE',
@@ -109,116 +117,143 @@ async function seed() {
       {
         nombreRol: 'Gerencia',
         descripcion: 'Aprueba requisiciones revisadas por el nivel anterior',
+        category: 'GERENCIA',
       },
       {
         nombreRol: 'Director PMO',
         descripcion: 'Dirige área de PMO y revisa requisiciones de analistas',
+        category: 'DIRECTOR_AREA',
       },
       {
         nombreRol: 'Director Comercial',
         descripcion:
           'Dirige área comercial y revisa requisiciones de analistas',
+        category: 'DIRECTOR_AREA',
       },
       {
         nombreRol: 'Director Jurídico',
         descripcion: 'Dirige área jurídica y revisa requisiciones de analistas',
+        category: 'DIRECTOR_AREA',
       },
       {
         nombreRol: 'Director Técnico',
         descripcion:
           'Revisa requisiciones de Dirección Operativa y crea las propias',
+        category: 'DIRECTOR_AREA',
       },
       {
         nombreRol: 'Director Financiero y Administrativo',
         descripcion:
           'Dirige área financiera y administrativa, revisa requisiciones',
+        category: 'DIRECTOR_AREA',
       },
       {
         nombreRol: 'Director de Proyecto Antioquia',
         descripcion: 'Supervisa PQRS de Antioquia y crea requisiciones propias',
+        category: 'DIRECTOR_PROYECTO',
       },
       {
         nombreRol: 'Director de Proyecto Quindío',
         descripcion: 'Supervisa PQRS de Quindío y crea requisiciones propias',
+        category: 'DIRECTOR_PROYECTO',
       },
       {
         nombreRol: 'Director de Proyecto Valle',
         descripcion: 'Supervisa PQRS de Valle y crea requisiciones propias',
+        category: 'DIRECTOR_PROYECTO',
       },
       {
         nombreRol: 'Director de Proyecto Putumayo',
         descripcion: 'Supervisa PQRS de Putumayo y crea requisiciones propias',
+        category: 'DIRECTOR_PROYECTO',
       },
       {
         nombreRol: 'Analista PMO',
         descripcion: 'Crea requisiciones, reporta a Director PMO',
+        category: 'ANALISTA',
       },
       {
         nombreRol: 'Analista Comercial',
         descripcion: 'Crea requisiciones, reporta a Director Comercial',
+        category: 'ANALISTA',
       },
       {
         nombreRol: 'Analista Jurídico',
         descripcion: 'Crea requisiciones, reporta a Director Jurídico',
+        category: 'ANALISTA',
       },
       {
         nombreRol: 'Analista Administrativo',
         descripcion:
           'Crea requisiciones, reporta a Director Financiero y Administrativo',
+        category: 'ANALISTA',
       },
       {
         nombreRol: 'Coordinador Financiero',
         descripcion:
           'Crea requisiciones, reporta a Director Financiero y Administrativo',
+        category: 'COORDINADOR',
       },
       {
         nombreRol: 'Coordinador Jurídico',
         descripcion: 'Crea requisiciones, reporta a Director Jurídico',
+        category: 'COORDINADOR',
       },
       {
         nombreRol: 'PQRS El Cerrito',
         descripcion: 'Crea requisiciones locales de El Cerrito',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Guacarí',
         descripcion: 'Crea requisiciones locales de Guacarí',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Circasia',
         descripcion: 'Crea requisiciones locales de Circasia',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Quimbaya',
         descripcion: 'Crea requisiciones locales de Quimbaya',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Jericó',
         descripcion: 'Crea requisiciones locales de Jericó',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Ciudad Bolívar',
         descripcion: 'Crea requisiciones locales de Ciudad Bolívar',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Tarso',
         descripcion: 'Crea requisiciones locales de Tarso',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Pueblo Rico',
         descripcion: 'Crea requisiciones locales de Pueblo Rico',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Santa Bárbara',
         descripcion: 'Crea requisiciones locales de Santa Bárbara',
+        category: 'PQRS',
       },
       {
         nombreRol: 'PQRS Puerto Asís',
         descripcion: 'Crea requisiciones locales de Puerto Asís',
+        category: 'PQRS',
       },
       {
         nombreRol: 'Compras',
         descripcion:
           'Cotiza y gestiona órdenes de compra, no crea requisiciones',
+        category: 'COMPRAS',
       },
     ];
 
@@ -283,6 +318,41 @@ async function seed() {
       console.log(`✅ Assigned Compras gestion to all ${roles.length} roles`);
     }
 
+    // Asignar Auditorías solo a Gerencia, Director PMO y Analista PMO
+    const auditoriasGestion = gestiones.find((g) => g.slug === 'auditorias');
+    if (auditoriasGestion) {
+      const gerenciaRole = roles.find((r) => r.nombreRol === 'Gerencia');
+      const directorPMORole = roles.find((r) => r.nombreRol === 'Director PMO');
+      const analistaPMORole = roles.find((r) => r.nombreRol === 'Analista PMO');
+
+      const auditoriasRoleGestiones: Array<{ rolId: number; gestionId: number }> = [];
+      if (gerenciaRole) {
+        auditoriasRoleGestiones.push({
+          rolId: gerenciaRole.rolId,
+          gestionId: auditoriasGestion.gestionId,
+        });
+      }
+      if (directorPMORole) {
+        auditoriasRoleGestiones.push({
+          rolId: directorPMORole.rolId,
+          gestionId: auditoriasGestion.gestionId,
+        });
+      }
+      if (analistaPMORole) {
+        auditoriasRoleGestiones.push({
+          rolId: analistaPMORole.rolId,
+          gestionId: auditoriasGestion.gestionId,
+        });
+      }
+
+      if (auditoriasRoleGestiones.length > 0) {
+        await roleGestionRepository.save(auditoriasRoleGestiones);
+        console.log(
+          `✅ Assigned Auditorías gestion to ${auditoriasRoleGestiones.length} roles (Gerencia, Director PMO, Analista PMO)`,
+        );
+      }
+    }
+
     // ============================================
     // 5. SEED COMPANIES
     // ============================================
@@ -328,7 +398,7 @@ async function seed() {
       {
         companyId: canalesCompany.companyId,
         projectId: projects.find((p) => p.name === 'Administrativo')!.projectId,
-        code: '8',
+        code: '008',
       },
       {
         companyId: canalesCompany.companyId,
@@ -355,41 +425,41 @@ async function seed() {
         companyId: companies.find((c) => c.name.includes('El Cerrito'))!
           .companyId,
         projectId: undefined,
-        code: '2',
+        code: '002',
       },
       {
         companyId: companies.find((c) => c.name.includes('Circasia'))!
           .companyId,
         projectId: undefined,
-        code: '1',
+        code: '001',
       },
       {
         companyId: companies.find((c) => c.name.includes('Guacarí'))!.companyId,
         projectId: undefined,
-        code: '3',
+        code: '003',
       },
       {
         companyId: companies.find((c) => c.name.includes('Jamundí'))!.companyId,
         projectId: undefined,
-        code: '4',
+        code: '004',
       },
       {
         companyId: companies.find((c) => c.name.includes('Puerto Asís'))!
           .companyId,
         projectId: undefined,
-        code: '5',
+        code: '005',
       },
       {
         companyId: companies.find((c) => c.name.includes('Quimbaya'))!
           .companyId,
         projectId: undefined,
-        code: '6',
+        code: '006',
       },
       {
         companyId: companies.find((c) => c.name.includes('Santa Bárbara'))!
           .companyId,
         projectId: undefined,
-        code: '7',
+        code: '007',
       },
     ];
 
@@ -480,7 +550,7 @@ async function seed() {
       {
         companyId: canalesCompany.companyId,
         projectId: projects.find((p) => p.name === 'Administrativo')!.projectId,
-        prefix: 'ADM',
+        prefix: 'C&C',
       },
       {
         companyId: canalesCompany.companyId,
@@ -601,46 +671,60 @@ async function seed() {
         order: 4,
       },
       {
+        code: 'en_cotizacion',
+        name: 'En cotización',
+        description: 'En proceso de cotización por Compras',
+        color: 'cyan',
+        order: 5,
+      },
+      {
         code: 'rechazada_revisor',
         name: 'Rechazada por revisor',
         description: 'Devuelta al solicitante',
         color: 'orange',
-        order: 5,
+        order: 6,
       },
       {
         code: 'rechazada_gerencia',
         name: 'Rechazada por gerencia',
         description: 'Devuelta al solicitante por Gerencia',
         color: 'red',
-        order: 6,
+        order: 7,
       },
       {
         code: 'cotizada',
         name: 'Cotizada',
         description: 'Cotizaciones registradas',
         color: 'yellow',
-        order: 7,
+        order: 8,
       },
       {
         code: 'en_orden_compra',
         name: 'En orden de compra',
         description: 'Orden generada y en trámite',
         color: 'indigo',
-        order: 8,
+        order: 9,
       },
       {
         code: 'pendiente_recepcion',
         name: 'Pendiente de recepción',
         description: 'Orden emitida, en espera de materiales',
         color: 'purple',
-        order: 9,
+        order: 10,
       },
       {
-        code: 'finalizada',
-        name: 'Finalizada',
-        description: 'Recepción completada',
+        code: 'en_recepcion',
+        name: 'En recepción',
+        description: 'Recepción parcial de materiales en proceso',
+        color: 'violet',
+        order: 11,
+      },
+      {
+        code: 'recepcion_completa',
+        name: 'Recepción completa',
+        description: 'Todos los materiales recibidos',
         color: 'teal',
-        order: 10,
+        order: 12,
       },
     ];
 
@@ -656,104 +740,258 @@ async function seed() {
     // ============================================
     console.log('Seeding material groups...');
     const materialGroupsData = [
-      { name: 'Eléctrico' },
-      { name: 'Construcción' },
-      { name: 'Herramientas' },
+      { name: 'Luminarias y Reflectores' },
+      { name: 'Herrajes' },
+      { name: 'Conectores' },
+      { name: 'Protectores' },
+      { name: 'Electrónico' },
       { name: 'Suministros de Oficina' },
-      { name: 'Iluminación' },
-      { name: 'Seguridad Industrial' },
     ];
-
-    const materialGroups =
-      await materialGroupRepository.save(materialGroupsData);
+    
+    const materialGroups = await materialGroupRepository.save(materialGroupsData);
     console.log(`✅ Created ${materialGroups.length} material groups`);
 
     // ============================================
     // 13. SEED MATERIALS (catálogo básico)
     // ============================================
     console.log('Seeding materials...');
-    const electricoGroup = materialGroups.find((g) => g.name === 'Eléctrico')!;
-    const construccionGroup = materialGroups.find(
-      (g) => g.name === 'Construcción',
+
+    // 🔍 Encuentra cada grupo recién creado
+    const luminariasGroup = materialGroups.find(
+      (g) => g.name === 'Luminarias y Reflectores',
     )!;
-    const herramientasGroup = materialGroups.find(
-      (g) => g.name === 'Herramientas',
+    const herrajesGroup = materialGroups.find(
+      (g) => g.name === 'Herrajes',
+    )!;
+    const conectoresGroup = materialGroups.find(
+      (g) => g.name === 'Conectores',
+    )!;
+    const protectoresGroup = materialGroups.find(
+      (g) => g.name === 'Protectores',
+    )!;
+    const electronicoGroup = materialGroups.find(
+      (g) => g.name === 'Electrónico',
     )!;
     const oficinaGroup = materialGroups.find(
       (g) => g.name === 'Suministros de Oficina',
     )!;
-    const iluminacionGroup = materialGroups.find(
-      (g) => g.name === 'Iluminación',
-    )!;
+
+
+    console.log('Seeding materials...');
 
     const materialsData = [
+      // =============================
+      // LUMINARIAS Y REFLECTORES (3000–3053)
+      // =============================
       {
-        code: 'ELEC-001',
-        description: 'Cable #10 AWG',
-        groupId: electricoGroup.groupId,
+        code: '3047',
+        description: 'Proyector LED de 205W',
+        groupId: luminariasGroup.groupId,
       },
       {
-        code: 'ELEC-002',
-        description: 'Cable #12 AWG',
-        groupId: electricoGroup.groupId,
+        code: '3048',
+        description: 'Luminaria decorativa LED de 26W',
+        groupId: luminariasGroup.groupId,
       },
       {
-        code: 'ELEC-003',
-        description: 'Breaker 2x20A',
-        groupId: electricoGroup.groupId,
+        code: '3050',
+        description: 'Luminaria decorativa LED de 40W',
+        groupId: luminariasGroup.groupId,
       },
       {
-        code: 'CONST-001',
-        description: 'Poste de concreto 12m',
-        groupId: construccionGroup.groupId,
+        code: '3053',
+        description: 'Luminaria solar LED de 60W',
+        groupId: luminariasGroup.groupId,
+      },
+    
+      // =============================
+      // HERRAJES (3200–3260)
+      // =============================
+      {
+        code: '3200',
+        description: 'Collarín grillete 3-4" T3/8 U1 1/2',
+        groupId: herrajesGroup.groupId,
       },
       {
-        code: 'CONST-002',
-        description: 'Cemento gris 50kg',
-        groupId: construccionGroup.groupId,
+        code: '3231',
+        description: 'Brazo doble galvanizado 0.35m alt. 0.4m D1 1/4"',
+        groupId: herrajesGroup.groupId,
       },
       {
-        code: 'HERR-001',
-        description: 'Alicate universal 8"',
-        groupId: herramientasGroup.groupId,
+        code: '3244',
+        description: 'Cruceta metálica galvanizada 1/4" x 3" x 2m',
+        groupId: herrajesGroup.groupId,
       },
       {
-        code: 'HERR-002',
-        description: 'Destornillador plano',
-        groupId: herramientasGroup.groupId,
+        code: '3248',
+        description: 'Varilla roscada galvanizada 3/8" x 3m',
+        groupId: herrajesGroup.groupId,
+      },
+    
+      // =============================
+      // CONECTORES (3300–3311)
+      // =============================
+      {
+        code: '3300',
+        description: 'Conector 2 polos WAGO',
+        groupId: conectoresGroup.groupId,
       },
       {
-        code: 'OFIC-001',
-        description: 'Resma papel carta',
+        code: '3302',
+        description: 'Conector 4 polos WAGO',
+        groupId: conectoresGroup.groupId,
+      },
+      {
+        code: '3307',
+        description: 'Conector prensa estopa de 3/4"',
+        groupId: conectoresGroup.groupId,
+      },
+      {
+        code: '3309',
+        description: 'Empalme en gel 6-2 AWG 14-8AWG',
+        groupId: conectoresGroup.groupId,
+      },
+    
+      // =============================
+      // PROTECTORES (3400–3415)
+      // =============================
+      {
+        code: '3400',
+        description: 'Breaker 1x60A',
+        groupId: protectoresGroup.groupId,
+      },
+      {
+        code: '3402',
+        description: 'DPS 10kV',
+        groupId: protectoresGroup.groupId,
+      },
+      {
+        code: '3410',
+        description: 'Pararrayo 15kV',
+        groupId: protectoresGroup.groupId,
+      },
+      {
+        code: '3408',
+        description: 'Kit puesta a tierra',
+        groupId: protectoresGroup.groupId,
+      },
+    
+      // =============================
+      // ELECTRÓNICO (3500–3539)
+      // =============================
+      {
+        code: '3500',
+        description: 'Driver de 28W',
+        groupId: electronicoGroup.groupId,
+      },
+      {
+        code: '3511',
+        description: 'Driver de 50W',
+        groupId: electronicoGroup.groupId,
+      },
+      {
+        code: '3534',
+        description: 'Driver de 205W',
+        groupId: electronicoGroup.groupId,
+      },
+      {
+        code: '3537',
+        description: 'Fotocelda IP65',
+        groupId: electronicoGroup.groupId,
+      },
+    
+      // =============================
+      // SUMINISTROS DE OFICINA
+      // =============================
+      {
+        code: '4000',
+        description: 'Resma de papel tamaño carta',
         groupId: oficinaGroup.groupId,
       },
       {
-        code: 'OFIC-002',
-        description: 'Carpeta AZ',
+        code: '4001',
+        description: 'Carpeta de archivo tipo AZ',
         groupId: oficinaGroup.groupId,
-      },
-      {
-        code: 'ILUM-001',
-        description: 'Lámpara LED 50W',
-        groupId: iluminacionGroup.groupId,
-      },
-      {
-        code: 'ILUM-002',
-        description: 'Lámpara LED 100W',
-        groupId: iluminacionGroup.groupId,
-      },
-      {
-        code: 'ILUM-003',
-        description: 'Reflector LED 150W',
-        groupId: iluminacionGroup.groupId,
       },
     ];
-
+    
     const materials = await materialRepository.save(materialsData);
     console.log(`✅ Created ${materials.length} materials`);
 
     // ============================================
-    // 14. SEED TEST USERS (27 usuarios - uno por cada rol)
+    // 14. SEED SUPPLIERS (proveedores de prueba)
+    // ============================================
+    console.log('Seeding suppliers...');
+    const supplierRepository = dataSource.getRepository(Supplier);
+
+    const suppliersData = [
+      {
+        nitCc: '900123456-1',
+        name: 'Distribuidora Eléctrica del Valle S.A.S',
+        contactPerson: 'Carlos Rodríguez',
+        phone: '3101234567',
+        email: 'ventas@distrivalle.com',
+        address: 'Calle 10 #15-20',
+        city: 'Cali',
+        isActive: true,
+      },
+      {
+        nitCc: '800987654-3',
+        name: 'Suministros Industriales Colombia Ltda',
+        contactPerson: 'María Fernanda López',
+        phone: '3209876543',
+        email: 'compras@suministroscol.com',
+        address: 'Carrera 25 #45-30',
+        city: 'Bogotá',
+        isActive: true,
+      },
+      {
+        nitCc: '700555888-9',
+        name: 'Materiales Eléctricos Express S.A',
+        contactPerson: 'Jorge Alberto Díaz',
+        phone: '3156789012',
+        email: 'contacto@matelectricos.com',
+        address: 'Avenida 6N #28-15',
+        city: 'Cali',
+        isActive: true,
+      },
+      {
+        nitCc: '900333222-5',
+        name: 'Ferretería y Construcciones Los Andes S.A.S',
+        contactPerson: 'Andrea Morales Vélez',
+        phone: '3187654321',
+        email: 'ventas@ferreterialosandes.com',
+        address: 'Carrera 15 #30-45',
+        city: 'Medellín',
+        isActive: true,
+      },
+      {
+        nitCc: '800444555-7',
+        name: 'Equipos y Herramientas Industriales Ltda',
+        contactPerson: 'Roberto Castro Jiménez',
+        phone: '3165432109',
+        email: 'info@equiposind.com',
+        address: 'Calle 50 #20-10',
+        city: 'Bogotá',
+        isActive: true,
+      },
+      {
+        nitCc: '900777888-2',
+        name: 'Comercializadora Eléctrica del Pacífico S.A',
+        contactPerson: 'Luisa Fernanda Gómez',
+        phone: '3198765432',
+        email: 'comercial@electricapacifico.com',
+        address: 'Avenida 3 Norte #12-25',
+        city: 'Cali',
+        isActive: true,
+      },
+    ];
+
+    const suppliers = await supplierRepository.save(suppliersData);
+    console.log(`✅ Created ${suppliers.length} suppliers`);
+
+    // ============================================
+    // 15. SEED TEST USERS (27 usuarios - uno por cada rol)
     // ============================================
     console.log('Seeding test users...');
     const hashedPassword = await bcrypt.hash('Canalco2025!', 10);
@@ -1140,10 +1378,10 @@ async function seed() {
 
     const authorizationsData = [
       // ============================================
-      // FLUJO 1: PQRS → Director Proyecto → Director Técnico → Gerencia
+      // FLUJO 1: PQRS → Director Proyecto → Gerencia (2 niveles)
       // ============================================
 
-      // PQRS ANTIOQUIA (Jericó, Ciudad Bolívar, Tarso, Santa Bárbara)
+      // PQRS ANTIOQUIA (Jericó, Ciudad Bolívar, Tarso, Pueblo Rico, Santa Bárbara)
       {
         usuarioAutorizadorId: dirProyAntioquiaUser.userId,
         usuarioAutorizadoId: pqrsJericoUser.userId,
@@ -1163,6 +1401,14 @@ async function seed() {
       {
         usuarioAutorizadorId: dirProyAntioquiaUser.userId,
         usuarioAutorizadoId: pqrsTarsoUser.userId,
+        gestionId: comprasGestion!.gestionId,
+        tipoAutorizacion: 'revision',
+        nivel: 1,
+        esActivo: true,
+      },
+      {
+        usuarioAutorizadorId: dirProyAntioquiaUser.userId,
+        usuarioAutorizadoId: pqrsPuebloRicoUser.userId,
         gestionId: comprasGestion!.gestionId,
         tipoAutorizacion: 'revision',
         nivel: 1,
@@ -1195,7 +1441,7 @@ async function seed() {
         esActivo: true,
       },
 
-      // PQRS VALLE (El Cerrito, Guacarí, Pueblo Rico)
+      // PQRS VALLE (El Cerrito, Guacarí)
       {
         usuarioAutorizadorId: dirProyValleUser.userId,
         usuarioAutorizadoId: pqrsElCerritoUser.userId,
@@ -1212,14 +1458,6 @@ async function seed() {
         nivel: 1,
         esActivo: true,
       },
-      {
-        usuarioAutorizadorId: dirProyValleUser.userId,
-        usuarioAutorizadoId: pqrsPuebloRicoUser.userId,
-        gestionId: comprasGestion!.gestionId,
-        tipoAutorizacion: 'revision',
-        nivel: 1,
-        esActivo: true,
-      },
 
       // PQRS PUTUMAYO (Puerto Asís)
       {
@@ -1231,13 +1469,51 @@ async function seed() {
         esActivo: true,
       },
 
-      // Directores de Proyecto → Director Técnico (nivel 2)
+      // Directores de Proyecto → Gerencia (aprobación nivel 2 para PQRS)
+      {
+        usuarioAutorizadorId: gerenciaUser.userId,
+        usuarioAutorizadoId: dirProyAntioquiaUser.userId,
+        gestionId: comprasGestion!.gestionId,
+        tipoAutorizacion: 'aprobacion',
+        nivel: 2,
+        esActivo: true,
+      },
+      {
+        usuarioAutorizadorId: gerenciaUser.userId,
+        usuarioAutorizadoId: dirProyQuindioUser.userId,
+        gestionId: comprasGestion!.gestionId,
+        tipoAutorizacion: 'aprobacion',
+        nivel: 2,
+        esActivo: true,
+      },
+      {
+        usuarioAutorizadorId: gerenciaUser.userId,
+        usuarioAutorizadoId: dirProyValleUser.userId,
+        gestionId: comprasGestion!.gestionId,
+        tipoAutorizacion: 'aprobacion',
+        nivel: 2,
+        esActivo: true,
+      },
+      {
+        usuarioAutorizadorId: gerenciaUser.userId,
+        usuarioAutorizadoId: dirProyPutumayoUser.userId,
+        gestionId: comprasGestion!.gestionId,
+        tipoAutorizacion: 'aprobacion',
+        nivel: 2,
+        esActivo: true,
+      },
+
+      // ============================================
+      // FLUJO 2: Directores de Proyecto → Director Técnico → Gerencia
+      // ============================================
+
+      // Directores de Proyecto → Director Técnico (revisión nivel 1)
       {
         usuarioAutorizadorId: dirTecnicoUser.userId,
         usuarioAutorizadoId: dirProyAntioquiaUser.userId,
         gestionId: comprasGestion!.gestionId,
         tipoAutorizacion: 'revision',
-        nivel: 2,
+        nivel: 1,
         esActivo: true,
       },
       {
@@ -1245,7 +1521,7 @@ async function seed() {
         usuarioAutorizadoId: dirProyQuindioUser.userId,
         gestionId: comprasGestion!.gestionId,
         tipoAutorizacion: 'revision',
-        nivel: 2,
+        nivel: 1,
         esActivo: true,
       },
       {
@@ -1253,7 +1529,7 @@ async function seed() {
         usuarioAutorizadoId: dirProyValleUser.userId,
         gestionId: comprasGestion!.gestionId,
         tipoAutorizacion: 'revision',
-        nivel: 2,
+        nivel: 1,
         esActivo: true,
       },
       {
@@ -1261,19 +1537,17 @@ async function seed() {
         usuarioAutorizadoId: dirProyPutumayoUser.userId,
         gestionId: comprasGestion!.gestionId,
         tipoAutorizacion: 'revision',
-        nivel: 2,
+        nivel: 1,
         esActivo: true,
       },
 
-      // ============================================
-      // FLUJO 2 y 3: Director Técnico → Gerencia
-      // ============================================
+      // Director Técnico → Gerencia (aprobación nivel 2)
       {
         usuarioAutorizadorId: gerenciaUser.userId,
         usuarioAutorizadoId: dirTecnicoUser.userId,
         gestionId: comprasGestion!.gestionId,
         tipoAutorizacion: 'aprobacion',
-        nivel: 3,
+        nivel: 2,
         esActivo: true,
       },
 
@@ -1498,6 +1772,7 @@ async function seed() {
     console.log(`   - ${requisitionStatuses.length} requisition statuses`);
     console.log(`   - ${materialGroups.length} material groups`);
     console.log(`   - ${materials.length} materials`);
+    console.log(`   - ${suppliers.length} suppliers`);
     console.log(`   - ${users.length} test users (27 roles completos)`);
     console.log(`   - ${authorizations.length} authorizations (cadenas completas)`);
     console.log('\n🔑 Credenciales de prueba (Password: Canalco2025!):');

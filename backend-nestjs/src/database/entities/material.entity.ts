@@ -3,9 +3,11 @@ import {
   Column,
   PrimaryGeneratedColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
 } from 'typeorm';
 import { MaterialGroup } from './material-group.entity';
+import { RequisitionItem } from './requisition-item.entity';
 
 @Entity('materials')
 export class Material {
@@ -24,4 +26,7 @@ export class Material {
   @ManyToOne(() => MaterialGroup, (materialGroup) => materialGroup.materials)
   @JoinColumn({ name: 'group_id' })
   materialGroup: MaterialGroup;
+
+  @OneToMany(() => RequisitionItem, (item) => item.material)
+  requisitionItems: RequisitionItem[];
 }

@@ -2,6 +2,7 @@ import {
   IsNumber,
   IsOptional,
   IsArray,
+  IsString,
   ValidateNested,
   ArrayMinSize,
 } from 'class-validator';
@@ -41,6 +42,26 @@ export class CreateRequisitionDto {
   @IsNumber({}, { message: 'El projectId debe ser un número válido' })
   @Type(() => Number)
   projectId?: number;
+
+  @ApiProperty({
+    description: 'Nombre de la obra (campo opcional, alfanumérico)',
+    example: 'Obra Principal - Sector Norte',
+    type: String,
+    required: false,
+  })
+  @IsOptional()
+  @IsString({ message: 'La obra debe ser una cadena de texto' })
+  obra?: string;
+
+  @ApiProperty({
+    description: 'Código de la obra (campo opcional, alfanumérico)',
+    example: 'OB-2025-001',
+    type: String,
+    required: false,
+  })
+  @IsOptional()
+  @IsString({ message: 'El código de obra debe ser una cadena de texto' })
+  codigoObra?: string;
 
   @ApiProperty({
     description:

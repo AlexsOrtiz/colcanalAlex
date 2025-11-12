@@ -9,6 +9,8 @@ services:
       POSTGRES_USER: ${DB_USERNAME:-canalco}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-canalco}
       POSTGRES_DB: ${DB_DATABASE:-canalco}
+      TZ: America/Bogota
+      PGTZ: America/Bogota
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
@@ -32,6 +34,7 @@ services:
   #   environment:
   #     NODE_ENV: ${NODE_ENV:-development}
   #     PORT: ${PORT:-3000}
+  #     TZ: America/Bogota
   #     DB_HOST: postgres
   #     DB_PORT: 5432
   #     DB_USERNAME: ${DB_USERNAME:-canalco}

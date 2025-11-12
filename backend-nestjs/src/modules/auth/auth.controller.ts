@@ -334,4 +334,75 @@ export class AuthController {
   async getProfile(@CurrentUser() user: User) {
     return this.authService.getProfile(user.userId);
   }
+
+  @Get('modules')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Obtener módulos disponibles para el usuario',
+    description: `
+    Retorna todos los módulos del sistema con un flag indicando si el usuario tiene acceso.
+
+    ## Módulos del sistema
+
+    El sistema tiene los siguientes módulos:
+    1. **Dashboard** - Pantalla principal
+    2. **Compras** - Gestión de requisiciones, cotizaciones, órdenes y recepciones
+    3. **Inventarios** - Gestión de inventario (próximamente)
+    4. **Reportes** - Reportes y análisis (próximamente)
+    5. **Usuarios** - Administración de usuarios
+    6. **Proveedores** - Gestión de proveedores
+    7. **Auditorías** - Registros de auditoría
+    8. **Notificaciones** - Sistema de notificaciones
+
+    ## Respuesta
+
+    Cada módulo incluye:
+    - **gestionId**: ID del módulo
+    - **nombre**: Nombre del módulo
+    - **slug**: Slug único para routing
+    - **icono**: Nombre del ícono de lucide-react
+    - **hasAccess**: true si el usuario tiene acceso, false si no
+
+    ## Uso en el frontend
+
+    Los módulos con \`hasAccess: false\` deben mostrarse con opacidad reducida
+    y al hacer clic mostrar un mensaje: "No tiene permisos para acceder a este módulo."
+    `,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de módulos con indicador de acceso',
+    schema: {
+      example: [
+        {
+          gestionId: 1,
+          nombre: 'Dashboard',
+          slug: 'dashboard',
+          icono: 'LayoutDashboard',
+          hasAccess: true,
+        },
+        {
+          gestionId: 2,
+          nombre: 'Compras',
+          slug: 'compras',
+          icono: 'ShoppingCart',
+          hasAccess: true,
+        },
+        {
+          gestionId: 3,
+          nombre: 'Inventarios',
+          slug: 'inventarios',
+          icono: 'Package',
+          hasAccess: false,
+        },
+      ],
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'No autorizado',
+  })
+  async getUserModules(@CurrentUser() user: User) {
+    return this.authService.getUserModules(user.userId);
+  }
 }

@@ -3,10 +3,13 @@ import {
   Column,
   PrimaryGeneratedColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
 } from 'typeorm';
 import { Requisition } from './requisition.entity';
 import { Material } from './material.entity';
+import { RequisitionItemQuotation } from './requisition-item-quotation.entity';
+import { PurchaseOrderItem } from './purchase-order-item.entity';
 
 @Entity('requisition_items')
 export class RequisitionItem {
@@ -38,4 +41,10 @@ export class RequisitionItem {
   @ManyToOne(() => Material)
   @JoinColumn({ name: 'material_id' })
   material: Material;
+
+  @OneToMany(() => RequisitionItemQuotation, (quotation) => quotation.requisitionItem)
+  quotations: RequisitionItemQuotation[];
+
+  @OneToMany(() => PurchaseOrderItem, (poItem) => poItem.requisitionItem)
+  purchaseOrderItems: PurchaseOrderItem[];
 }

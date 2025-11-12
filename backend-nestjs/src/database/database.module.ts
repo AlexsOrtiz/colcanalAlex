@@ -16,7 +16,7 @@ import * as entities from './entities';
         password: configService.get('database.password'),
         database: configService.get('database.database'),
         entities: Object.values(entities),
-        synchronize: false, // Use migrations in production
+        synchronize: true, // ⚠️ TEMPORAL - Cambiado a true para crear tablas iniciales
         logging: configService.get('nodeEnv') === 'development',
         migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
         migrationsRun: false,

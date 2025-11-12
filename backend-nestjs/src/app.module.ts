@@ -6,6 +6,8 @@ import { AppService } from './app.service';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { PurchasesModule } from './modules/purchases/purchases.module';
+import { SuppliersModule } from './modules/suppliers/suppliers.module';
+import { AuditModule } from './modules/audit/audit.module';
 import configuration from './config/configuration';
 
 @Module({
@@ -24,6 +26,8 @@ import configuration from './config/configuration';
     DatabaseModule,
     AuthModule,
     PurchasesModule,
+    SuppliersModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,129 +1,145 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import * as z from 'zod'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Eye, EyeOff, Mail, Lock } from 'lucide-react'
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Eye, EyeOff, Mail, Lock, Loader2 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
+// Validation schema with domain validation
 const loginSchema = z.object({
-  email: z.string().email('Email inválido'),
+  email: z
+    .string()
+    .email('Email inválido')
+    .refine(
+      (email) => {
+        const domain = email.split('@')[1];
+        return domain === 'canalco.com' || domain === 'alumbrado.com';
+      },
+      {
+        message: 'El email debe ser de dominio @canalco.com o @alumbrado.com',
+      }
+    ),
   password: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres'),
-  rememberMe: z.boolean().optional()
-})
+});
 
-type LoginFormData = z.infer<typeof loginSchema>
+type LoginFormData = z.infer<typeof loginSchema>;
 
 export function LoginForm() {
-  const navigate = useNavigate()
-  const [showPassword, setShowPassword] = useState(false)
-  const [rememberMe, setRememberMe] = useState(false)
+  const navigate = useNavigate();
+  const { login, error, clearError } = useAuth();
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting }
+    formState: { errors, isSubmitting },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      rememberMe: false
-    }
-  })
+  });
 
   const onSubmit = async (data: LoginFormData) => {
-    // Simular delay de autenticación
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    try {
+      clearError();
 
-    console.log('Login data:', data)
+      await login({
+        email: data.email,
+        password: data.password,
+      });
 
-    // Navegar al dashboard después del "login"
-    navigate('/dashboard')
-  }
+      // Navigate to dashboard on success
+      navigate('/dashboard');
+    } catch (err) {
+      // Error is handled by AuthContext and displayed below
+      console.error('Login error:', err);
+    }
+  };
 
   return (
-    <div className="w-full max-w-md space-y-8">
-      <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold tracking-tight">Bienvenido</h1>
-        <p className="text-muted-foreground">
-          Ingresa tus credenciales para acceder al sistema
-        </p>
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+      {/* Email Field */}
+      <div className="space-y-2">
+        <Label
+          htmlFor="email"
+          className="text-sm font-medium text-[hsl(var(--canalco-neutral-800))]"
+        >
+          Correo
+        </Label>
+        <div className="relative">
+          <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-[hsl(var(--canalco-neutral-600))]" />
+          <Input
+            id="email"
+            type="email"
+            placeholder="correo@canalco.com"
+            className="pl-11 h-12 rounded-full border-[hsl(var(--canalco-neutral-300))] focus:border-[hsl(var(--canalco-primary))] focus:ring-[hsl(var(--canalco-primary))]"
+            {...register('email')}
+          />
+        </div>
+        {errors.email && (
+          <p className="text-sm text-[hsl(var(--canalco-error))] pl-4">
+            {errors.email.message}
+          </p>
+        )}
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* Email Field */}
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <div className="relative">
-            <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              id="email"
-              type="email"
-              placeholder="tu@email.com"
-              className="pl-10"
-              {...register('email')}
-            />
-          </div>
-          {errors.email && (
-            <p className="text-sm text-destructive">{errors.email.message}</p>
-          )}
-        </div>
-
-        {/* Password Field */}
-        <div className="space-y-2">
-          <Label htmlFor="password">Contraseña</Label>
-          <div className="relative">
-            <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              id="password"
-              type={showPassword ? 'text' : 'password'}
-              placeholder="••••••••"
-              className="pl-10 pr-10"
-              {...register('password')}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showPassword ? (
-                <EyeOff className="h-4 w-4" />
-              ) : (
-                <Eye className="h-4 w-4" />
-              )}
-            </button>
-          </div>
-          {errors.password && (
-            <p className="text-sm text-destructive">{errors.password.message}</p>
-          )}
-        </div>
-
-        {/* Remember Me Checkbox */}
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="rememberMe"
-            checked={rememberMe}
-            onCheckedChange={(checked) => setRememberMe(checked as boolean)}
-          />
-          <Label
-            htmlFor="rememberMe"
-            className="text-sm font-normal cursor-pointer"
-          >
-            Recordar sesión
-          </Label>
-        </div>
-
-        {/* Submit Button */}
-        <Button
-          type="submit"
-          className="w-full"
-          disabled={isSubmitting}
+      {/* Password Field */}
+      <div className="space-y-2">
+        <Label
+          htmlFor="password"
+          className="text-sm font-medium text-[hsl(var(--canalco-neutral-800))]"
         >
-          {isSubmitting ? 'Iniciando sesión...' : 'Iniciar sesión'}
-        </Button>
-      </form>
-    </div>
-  )
+          Contraseña
+        </Label>
+        <div className="relative">
+          <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-[hsl(var(--canalco-neutral-600))]" />
+          <Input
+            id="password"
+            type={showPassword ? 'text' : 'password'}
+            placeholder="••••••••"
+            className="pl-11 pr-11 h-12 rounded-full border-[hsl(var(--canalco-neutral-300))] focus:border-[hsl(var(--canalco-primary))] focus:ring-[hsl(var(--canalco-primary))]"
+            {...register('password')}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-[hsl(var(--canalco-neutral-600))] hover:text-[hsl(var(--canalco-neutral-900))] transition-colors"
+            aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+          >
+            {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+          </button>
+        </div>
+        {errors.password && (
+          <p className="text-sm text-[hsl(var(--canalco-error))] pl-4">
+            {errors.password.message}
+          </p>
+        )}
+      </div>
+
+      {/* Global Error Message from API */}
+      {error && (
+        <div className="bg-[hsl(var(--canalco-error))]/10 border border-[hsl(var(--canalco-error))] text-[hsl(var(--canalco-error))] px-4 py-3 rounded-full text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* Submit Button */}
+      <Button
+        type="submit"
+        disabled={isSubmitting}
+        className="w-full h-12 rounded-full bg-[hsl(var(--canalco-primary))] hover:bg-[hsl(var(--canalco-primary-hover))] text-white font-semibold text-base transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {isSubmitting ? (
+          <span className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Iniciando sesión...
+          </span>
+        ) : (
+          'Login'
+        )}
+      </Button>
+    </form>
+  );
 }

@@ -9,6 +9,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from '../../database/entities/user.entity';
+import { Gestion } from '../../database/entities/gestion.entity';
+import { RoleGestion } from '../../database/entities/role-gestion.entity';
 import { LoginDto } from './dto/login.dto';
 
 @Injectable()
@@ -16,6 +18,10 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(Gestion)
+    private gestionRepository: Repository<Gestion>,
+    @InjectRepository(RoleGestion)
+    private roleGestionRepository: Repository<RoleGestion>,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
@@ -126,5 +132,41 @@ export class AuthService {
     const { password, refreshToken, ...userWithoutSensitiveData } = user;
 
     return userWithoutSensitiveData;
+  }
+
+  async getUserModules(userId: number) {
+    // Get user with role
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // Get all gestiones (modules)
+    const allGestiones = await this.gestionRepository.find({
+      order: { gestionId: 'ASC' },
+    });
+
+    // Get role gestiones for this user's role
+    const roleGestiones = await this.roleGestionRepository.find({
+      where: { rolId: user.rolId },
+    });
+
+    // Create a set of gestionIds that the role has access to
+    const allowedGestionIds = new Set(
+      roleGestiones.map((rg) => rg.gestionId),
+    );
+
+    // Map all gestiones and mark which ones are accessible
+    return allGestiones.map((gestion) => ({
+      gestionId: gestion.gestionId,
+      nombre: gestion.nombre,
+      slug: gestion.slug,
+      icono: gestion.icono,
+      hasAccess: allowedGestionIds.has(gestion.gestionId),
+    }));
   }
 }

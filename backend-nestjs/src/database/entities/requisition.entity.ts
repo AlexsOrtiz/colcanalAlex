@@ -15,6 +15,9 @@ import { ProjectCode } from './project-code.entity';
 import { User } from './user.entity';
 import { RequisitionItem } from './requisition-item.entity';
 import { RequisitionLog } from './requisition-log.entity';
+import { RequisitionStatus } from './requisition-status.entity';
+import { PurchaseOrder } from './purchase-order.entity';
+import { RequisitionApproval } from './requisition-approval.entity';
 
 @Entity('requisitions')
 export class Requisition {
@@ -39,13 +42,14 @@ export class Requisition {
   @Column({ name: 'created_by' })
   createdBy: number;
 
-  @Column({
-    name: 'status',
-    type: 'varchar',
-    length: 50,
-    default: 'Pendiente',
-  })
-  status: string;
+  @Column({ name: 'status_id', default: 1 })
+  statusId: number;
+
+  @Column({ name: 'reviewed_by', nullable: true })
+  reviewedBy: number;
+
+  @Column({ name: 'approved_by', nullable: true })
+  approvedBy: number;
 
   @CreateDateColumn({
     name: 'created_at',
@@ -60,6 +64,18 @@ export class Requisition {
     default: () => 'CURRENT_TIMESTAMP',
   })
   updatedAt: Date;
+
+  @Column({ name: 'reviewed_at', type: 'timestamp', nullable: true })
+  reviewedAt: Date;
+
+  @Column({ name: 'approved_at', type: 'timestamp', nullable: true })
+  approvedAt: Date;
+
+  @Column({ name: 'obra', type: 'varchar', length: 100, nullable: true })
+  obra: string;
+
+  @Column({ name: 'codigo_obra', type: 'varchar', length: 50, nullable: true })
+  codigoObra: string;
 
   // Relaciones
   @ManyToOne(() => Company)
@@ -82,6 +98,18 @@ export class Requisition {
   @JoinColumn({ name: 'created_by' })
   creator: User;
 
+  @ManyToOne(() => RequisitionStatus)
+  @JoinColumn({ name: 'status_id' })
+  status: RequisitionStatus;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'reviewed_by' })
+  reviewer: User;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'approved_by' })
+  approver: User;
+
   @OneToMany(() => RequisitionItem, (item) => item.requisition, {
     cascade: true,
   })
@@ -91,4 +119,10 @@ export class Requisition {
     cascade: true,
   })
   logs: RequisitionLog[];
+
+  @OneToMany(() => PurchaseOrder, (purchaseOrder) => purchaseOrder.requisition)
+  purchaseOrders: PurchaseOrder[];
+
+  @OneToMany(() => RequisitionApproval, (approval) => approval.requisition)
+  approvals: RequisitionApproval[];
 }

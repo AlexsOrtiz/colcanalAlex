@@ -22,3 +22,13 @@ export { Requisition } from './requisition.entity';
 export { RequisitionItem } from './requisition-item.entity';
 export { RequisitionStatus } from './requisition-status.entity';
 export { RequisitionLog } from './requisition-log.entity';
+export { RequisitionApproval } from './requisition-approval.entity';
+export { RequisitionItemApproval } from './requisition-item-approval.entity';
+
+// Purchases entities
+export { Supplier } from './supplier.entity';
+export { RequisitionItemQuotation } from './requisition-item-quotation.entity';
+export { PurchaseOrder } from './purchase-order.entity';
+export { PurchaseOrderItem } from './purchase-order-item.entity';
+export { PurchaseOrderSequence } from './purchase-order-sequence.entity';
+export { MaterialReceipt } from './material-receipt.entity';

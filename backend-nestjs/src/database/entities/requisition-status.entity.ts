@@ -1,4 +1,6 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
+import { Requisition } from './requisition.entity';
+import { RequisitionApproval } from './requisition-approval.entity';
 
 @Entity('requisition_statuses')
 export class RequisitionStatus {
@@ -19,4 +21,13 @@ export class RequisitionStatus {
 
   @Column({ type: 'integer', default: 0 })
   order: number;
+
+  @OneToMany(() => Requisition, (requisition) => requisition.status)
+  requisitions: Requisition[];
+
+  @OneToMany(() => RequisitionApproval, (approval) => approval.previousStatus)
+  approvalsAsPreviousStatus: RequisitionApproval[];
+
+  @OneToMany(() => RequisitionApproval, (approval) => approval.newStatus)
+  approvalsAsNewStatus: RequisitionApproval[];
 }

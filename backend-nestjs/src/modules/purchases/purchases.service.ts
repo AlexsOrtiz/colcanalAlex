@@ -5,12 +5,14 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, Between, IsNull } from 'typeorm';
+import { Repository, DataSource, Between, IsNull, In } from 'typeorm';
 import { Requisition } from '../../database/entities/requisition.entity';
 import { RequisitionItem } from '../../database/entities/requisition-item.entity';
 import { RequisitionLog } from '../../database/entities/requisition-log.entity';
+import { RequisitionStatus } from '../../database/entities/requisition-status.entity';
 import { RequisitionPrefix } from '../../database/entities/requisition-prefix.entity';
 import { RequisitionSequence } from '../../database/entities/requisition-sequence.entity';
+import { RequisitionItemApproval } from '../../database/entities/requisition-item-approval.entity';
 import { OperationCenter } from '../../database/entities/operation-center.entity';
 import { ProjectCode } from '../../database/entities/project-code.entity';
 import { User } from '../../database/entities/user.entity';
@@ -20,6 +22,17 @@ import { CreateRequisitionDto } from './dto/create-requisition.dto';
 import { UpdateRequisitionDto } from './dto/update-requisition.dto';
 import { FilterRequisitionsDto } from './dto/filter-requisitions.dto';
 import { ReviewRequisitionDto } from './dto/review-requisition.dto';
+import { Supplier } from '../../database/entities/supplier.entity';
+import { RequisitionItemQuotation } from '../../database/entities/requisition-item-quotation.entity';
+import { ManageQuotationDto } from './dto/manage-quotation.dto';
+import { PurchaseOrder } from '../../database/entities/purchase-order.entity';
+import { PurchaseOrderItem } from '../../database/entities/purchase-order-item.entity';
+import { PurchaseOrderSequence } from '../../database/entities/purchase-order-sequence.entity';
+import { MaterialReceipt } from '../../database/entities/material-receipt.entity';
+import { calculateSLA, getSLAForStatus } from '../../utils/business-days.util';
+import { CreatePurchaseOrdersDto } from './dto/create-purchase-orders.dto';
+import { CreateMaterialReceiptDto } from './dto/create-material-receipt.dto';
+import { UpdateMaterialReceiptDto } from './dto/update-material-receipt.dto';
 
 @Injectable()
 export class PurchasesService {
@@ -30,6 +43,8 @@ export class PurchasesService {
     private requisitionItemRepository: Repository<RequisitionItem>,
     @InjectRepository(RequisitionLog)
     private requisitionLogRepository: Repository<RequisitionLog>,
+    @InjectRepository(RequisitionStatus)
+    private requisitionStatusRepository: Repository<RequisitionStatus>,
     @InjectRepository(RequisitionPrefix)
     private requisitionPrefixRepository: Repository<RequisitionPrefix>,
     @InjectRepository(RequisitionSequence)
@@ -44,8 +59,183 @@ export class PurchasesService {
     private authorizationRepository: Repository<Authorization>,
     @InjectRepository(Company)
     private companyRepository: Repository<Company>,
+    @InjectRepository(Supplier)
+    private supplierRepository: Repository<Supplier>,
+    @InjectRepository(RequisitionItemQuotation)
+    private quotationRepository: Repository<RequisitionItemQuotation>,
+    @InjectRepository(PurchaseOrder)
+    private purchaseOrderRepository: Repository<PurchaseOrder>,
+    @InjectRepository(PurchaseOrderItem)
+    private purchaseOrderItemRepository: Repository<PurchaseOrderItem>,
+    @InjectRepository(PurchaseOrderSequence)
+    private purchaseOrderSequenceRepository: Repository<PurchaseOrderSequence>,
+    @InjectRepository(MaterialReceipt)
+    private materialReceiptRepository: Repository<MaterialReceipt>,
+    @InjectRepository(RequisitionItemApproval)
+    private itemApprovalRepository: Repository<RequisitionItemApproval>,
     private dataSource: DataSource,
   ) {}
+
+  // ============================================
+  // HELPER: Obtener status ID por código
+  // ============================================
+  private async getStatusIdByCode(code: string): Promise<number> {
+    const status = await this.requisitionStatusRepository.findOne({
+      where: { code },
+    });
+    if (!status) {
+      throw new Error(`Estado de requisición '${code}' no encontrado`);
+    }
+    return status.statusId;
+  }
+
+  // ============================================
+  // HELPER: Guardar aprobaciones de ítems
+  // ============================================
+  private async saveItemApprovals(
+    requisitionId: number,
+    userId: number,
+    approvalLevel: 'reviewer' | 'management',
+    itemDecisions: Array<{ itemId: number; decision: 'approve' | 'reject'; comments?: string }>,
+    queryRunner: any,
+  ): Promise<void> {
+    if (!itemDecisions || itemDecisions.length === 0) {
+      return;
+    }
+
+    // Obtener los ítems de la requisición
+    const items = await queryRunner.manager.find(RequisitionItem, {
+      where: { requisitionId },
+      relations: ['material'],
+    });
+
+    for (const decision of itemDecisions) {
+      const item = items.find(i => i.itemId === decision.itemId);
+      if (!item) {
+        continue; // Skip if item not found
+      }
+
+      // Verificar si ya existe una aprobación para este ítem en este nivel
+      const existing = await queryRunner.manager.findOne(RequisitionItemApproval, {
+        where: {
+          requisitionId,
+          itemNumber: item.itemNumber,
+          materialId: item.materialId,
+          approvalLevel,
+        },
+      });
+
+      if (existing) {
+        // Actualizar la existente
+        await queryRunner.manager.update(
+          RequisitionItemApproval,
+          { itemApprovalId: existing.itemApprovalId },
+          {
+            requisitionItemId: item.itemId,
+            quantity: item.quantity,
+            observation: item.observation,
+            userId,
+            status: decision.decision === 'approve' ? 'approved' : 'rejected',
+            comments: decision.comments,
+            isValid: true,
+          },
+        );
+      } else {
+        // Crear nueva aprobación
+        const approval = queryRunner.manager.create(RequisitionItemApproval, {
+          requisitionId,
+          itemNumber: item.itemNumber,
+          materialId: item.materialId,
+          quantity: item.quantity,
+          observation: item.observation,
+          requisitionItemId: item.itemId,
+          userId,
+          approvalLevel,
+          status: decision.decision === 'approve' ? 'approved' : 'rejected',
+          comments: decision.comments,
+          isValid: true,
+        });
+
+        await queryRunner.manager.save(RequisitionItemApproval, approval);
+      }
+    }
+  }
+
+  // ============================================
+  // HELPER: Obtener aprobaciones de ítems
+  // ============================================
+  async getItemApprovals(
+    requisitionId: number,
+    approvalLevel?: 'reviewer' | 'management',
+  ): Promise<any[]> {
+    const where: any = {
+      requisitionId,
+      isValid: true,
+    };
+
+    if (approvalLevel) {
+      where.approvalLevel = approvalLevel;
+    }
+
+    const approvals = await this.itemApprovalRepository.find({
+      where,
+      relations: ['user', 'requisitionItem', 'requisitionItem.material'],
+      order: { createdAt: 'DESC' },
+    });
+
+    return approvals;
+  }
+
+  // ============================================
+  // HELPER: Invalidar aprobaciones cuando se modifica un ítem
+  // ============================================
+  private async invalidateItemApprovals(
+    requisitionId: number,
+    modifiedItemIds: number[],
+    queryRunner: any,
+  ): Promise<void> {
+    if (modifiedItemIds.length === 0) {
+      return;
+    }
+
+    // Marcar como inválidas las aprobaciones de los ítems modificados
+    await queryRunner.manager.update(
+      RequisitionItemApproval,
+      {
+        requisitionId,
+        requisitionItemId: In(modifiedItemIds),
+        isValid: true,
+      },
+      { isValid: false },
+    );
+  }
+
+  // ============================================
+  // HELPER: Invalidar aprobaciones por itemNumber y materialId
+  // ============================================
+  private async invalidateItemApprovalsByContent(
+    requisitionId: number,
+    itemsToInvalidate: Array<{ itemNumber: number; materialId: number }>,
+    queryRunner: any,
+  ): Promise<void> {
+    if (itemsToInvalidate.length === 0) {
+      return;
+    }
+
+    // Invalidar cada ítem individualmente
+    for (const item of itemsToInvalidate) {
+      await queryRunner.manager.update(
+        RequisitionItemApproval,
+        {
+          requisitionId,
+          itemNumber: item.itemNumber,
+          materialId: item.materialId,
+          isValid: true,
+        },
+        { isValid: false },
+      );
+    }
+  }
 
   // ============================================
   // MÉTODOS CRUD BÁSICOS
@@ -105,6 +295,7 @@ export class PurchasesService {
       );
 
       // 7. Crear requisición
+      const pendingStatusId = await this.getStatusIdByCode('pendiente');
       const requisition = queryRunner.manager.create(Requisition, {
         requisitionNumber,
         companyId: dto.companyId,
@@ -112,7 +303,7 @@ export class PurchasesService {
         operationCenterId,
         projectCodeId: projectCodeId || undefined,
         createdBy: userId,
-        status: 'pendiente',
+        statusId: pendingStatusId,
       });
 
       const savedRequisition = await queryRunner.manager.save(requisition);
@@ -164,14 +355,10 @@ export class PurchasesService {
   }
 
   async getMyRequisitions(userId: number, filters: FilterRequisitionsDto) {
-    const {
-      page = 1,
-      limit = 10,
-      status,
-      fromDate,
-      toDate,
-      projectId,
-    } = filters;
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    const projectId = filters.projectId;
+    const { status, fromDate, toDate } = filters;
 
     const queryBuilder = this.requisitionRepository
       .createQueryBuilder('requisition')
@@ -181,15 +368,20 @@ export class PurchasesService {
       .leftJoinAndSelect('requisition.projectCode', 'projectCode')
       .leftJoinAndSelect('requisition.creator', 'creator')
       .leftJoinAndSelect('creator.role', 'role')
+      .leftJoinAndSelect('requisition.status', 'requisitionStatus')
       .leftJoinAndSelect('requisition.items', 'items')
       .leftJoinAndSelect('items.material', 'material')
       .leftJoinAndSelect('material.materialGroup', 'materialGroup')
+      .leftJoinAndSelect('requisition.logs', 'logs')
+      .leftJoinAndSelect('logs.user', 'logUser')
+      .leftJoinAndSelect('logUser.role', 'logUserRole')
       .where('requisition.createdBy = :userId', { userId })
-      .orderBy('requisition.createdAt', 'DESC');
+      .orderBy('requisition.createdAt', 'DESC')
+      .addOrderBy('logs.createdAt', 'DESC');
 
     // Filtros opcionales
     if (status) {
-      queryBuilder.andWhere('requisition.status = :status', { status });
+      queryBuilder.andWhere('requisitionStatus.code = :status', { status });
     }
 
     if (projectId) {
@@ -233,6 +425,7 @@ export class PurchasesService {
         'projectCode',
         'creator',
         'creator.role',
+        'status',
         'items',
         'items.material',
         'items.material.materialGroup',
@@ -264,7 +457,7 @@ export class PurchasesService {
   ) {
     const requisition = await this.requisitionRepository.findOne({
       where: { requisitionId },
-      relations: ['items'],
+      relations: ['items', 'status'],
     });
 
     if (!requisition) {
@@ -284,7 +477,7 @@ export class PurchasesService {
       'rechazada_revisor',
       'rechazada_gerencia',
     ];
-    if (!editableStatuses.includes(requisition.status)) {
+    if (!editableStatuses.includes(requisition.status.code)) {
       throw new BadRequestException(
         'Esta requisición ya no puede ser modificada',
       );
@@ -295,7 +488,7 @@ export class PurchasesService {
     await queryRunner.startTransaction();
 
     try {
-      const previousStatus = requisition.status;
+      const previousStatus = requisition.status.code;
 
       // Actualizar campos de la requisición
       if (dto.companyId) {
@@ -318,18 +511,74 @@ export class PurchasesService {
         requisition.projectId = dto.projectId;
       }
 
-      // Si estaba rechazada, volver a estado pendiente
-      if (
-        previousStatus === 'rechazada_revisor' ||
-        previousStatus === 'rechazada_gerencia'
-      ) {
-        requisition.status = 'pendiente';
+      // Si estaba rechazada, volver al estado apropiado según quién rechazó
+      let newStatusCode = previousStatus;
+      if (previousStatus === 'rechazada_revisor' || previousStatus === 'rechazada_gerencia') {
+        // Si fue rechazada (por revisor o gerencia), vuelve a pendiente para que el revisor la vea nuevamente
+        const pendingStatusId = await this.getStatusIdByCode('pendiente');
+        requisition.statusId = pendingStatusId;
+        // Eliminar la relación status para evitar conflictos con TypeORM
+        (requisition as any).status = undefined;
+        newStatusCode = 'pendiente';
       }
 
-      await queryRunner.manager.save(requisition);
+      await queryRunner.manager.save(Requisition, requisition);
 
       // Actualizar ítems si se proporcionan
       if (dto.items) {
+        // Guardar ítems viejos para comparar
+        const oldItems = await queryRunner.manager.find(RequisitionItem, {
+          where: { requisitionId },
+          order: { itemNumber: 'ASC' },
+        });
+
+        // Crear un mapa de ítems viejos por itemNumber
+        const oldItemsMap = new Map(
+          oldItems.map((item) => [item.itemNumber, item]),
+        );
+
+        // Detectar ítems que cambiaron (material, cantidad u observación diferentes)
+        const itemsToInvalidate: Array<{ itemNumber: number; materialId: number }> = [];
+
+        dto.items.forEach((newItem, index) => {
+          const itemNumber = index + 1;
+          const oldItem = oldItemsMap.get(itemNumber);
+
+          if (oldItem) {
+            // El ítem existía en la misma posición
+            const materialChanged = oldItem.materialId !== newItem.materialId;
+            const quantityChanged = parseFloat(oldItem.quantity.toString()) !== newItem.quantity;
+            const observationChanged = (oldItem.observation || '') !== (newItem.observation || '');
+
+            if (materialChanged || quantityChanged || observationChanged) {
+              // El ítem cambió, invalidar aprobaciones del ítem viejo
+              itemsToInvalidate.push({
+                itemNumber: oldItem.itemNumber,
+                materialId: oldItem.materialId,
+              });
+            }
+          }
+          // Si el ítem no existía (es nuevo), no hay aprobaciones que invalidar
+        });
+
+        // Verificar ítems que fueron eliminados (existían pero ya no)
+        oldItems.forEach((oldItem) => {
+          if (dto.items && oldItem.itemNumber > dto.items.length) {
+            // Este ítem fue eliminado
+            itemsToInvalidate.push({
+              itemNumber: oldItem.itemNumber,
+              materialId: oldItem.materialId,
+            });
+          }
+        });
+
+        // Invalidar aprobaciones de ítems modificados o eliminados
+        await this.invalidateItemApprovalsByContent(
+          requisitionId,
+          itemsToInvalidate,
+          queryRunner,
+        );
+
         // Eliminar ítems existentes
         await queryRunner.manager.delete(RequisitionItem, {
           requisitionId,
@@ -350,13 +599,21 @@ export class PurchasesService {
       }
 
       // Registrar log
+      let logAction = 'editar_requisicion';
+      let logComments = 'Requisición actualizada';
+
+      if (previousStatus === 'rechazada_revisor' || previousStatus === 'rechazada_gerencia') {
+        logAction = 'reenviar_requisicion';
+        logComments = `Requisición corregida y reenviada después de ser rechazada`;
+      }
+
       const log = queryRunner.manager.create(RequisitionLog, {
         requisitionId,
         userId,
-        action: 'editar_requisicion',
+        action: logAction,
         previousStatus,
-        newStatus: requisition.status,
-        comments: 'Requisición actualizada',
+        newStatus: newStatusCode,
+        comments: logComments,
       });
 
       await queryRunner.manager.save(log);
@@ -375,6 +632,7 @@ export class PurchasesService {
   async deleteRequisition(requisitionId: number, userId: number) {
     const requisition = await this.requisitionRepository.findOne({
       where: { requisitionId },
+      relations: ['status'],
     });
 
     if (!requisition) {
@@ -389,7 +647,7 @@ export class PurchasesService {
     }
 
     // Validar que está en estado pendiente
-    if (requisition.status !== 'pendiente') {
+    if (requisition.status.code !== 'pendiente') {
       throw new BadRequestException(
         'Solo se pueden eliminar requisiciones en estado pendiente',
       );
@@ -427,55 +685,214 @@ export class PurchasesService {
       (auth) => auth.usuarioAutorizadoId,
     );
 
-    if (subordinateIds.length === 0) {
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+
+    // Determinar estados según rol
+    const roleName = user.role.nombreRol;
+
+    // Validación temprana para roles que REQUIEREN subordinados
+    if (roleName.includes('Director') && subordinateIds.length === 0) {
       return {
         data: [],
         total: 0,
         page: 1,
         limit: 10,
         totalPages: 0,
+        pending: [],
+        processed: [],
       };
-    }
-
-    const { page = 1, limit = 10 } = filters;
-
-    // Determinar estados según rol
-    let statuses: string[] = [];
-    const roleName = user.role.nombreRol;
-
-    if (roleName === 'Gerencia') {
-      statuses = ['aprobada_revisor'];
-    } else if (roleName.includes('Director')) {
-      statuses = ['pendiente', 'en_revision'];
-    } else if (roleName === 'Compras') {
-      statuses = ['aprobada_gerencia'];
     }
 
     const queryBuilder = this.requisitionRepository
       .createQueryBuilder('requisition')
+      .leftJoinAndSelect('requisition.status', 'requisitionStatus')
       .leftJoinAndSelect('requisition.company', 'company')
       .leftJoinAndSelect('requisition.project', 'project')
       .leftJoinAndSelect('requisition.creator', 'creator')
       .leftJoinAndSelect('creator.role', 'creatorRole')
       .leftJoinAndSelect('requisition.items', 'items')
       .leftJoinAndSelect('items.material', 'material')
-      .where('requisition.createdBy IN (:...subordinateIds)', {
+      // Join with approvals to get action dates
+      .leftJoinAndSelect('requisition.approvals', 'approvals')
+      .leftJoinAndSelect('approvals.user', 'approvalUser')
+      .leftJoinAndSelect('approvals.newStatus', 'approvalNewStatus');
+
+    if (roleName === 'Gerencia') {
+      // Gerencia ve TODAS las requisiciones que pasaron por revisión + pendientes de subordinados
+      if (subordinateIds.length > 0) {
+        queryBuilder.where(
+          `(requisitionStatus.code IN ('aprobada_revisor', 'aprobada_gerencia', 'rechazada_gerencia', 'cotizada', 'en_orden_compra', 'pendiente_recepcion')) OR
+           (requisitionStatus.code = 'pendiente' AND requisition.createdBy IN (:...subordinateIds))`,
+          { subordinateIds },
+        );
+      } else {
+        // Si no tiene subordinados directos, ve todas las requisiciones que pasaron por revisión
+        queryBuilder.where('requisitionStatus.code IN (:...statuses)', {
+          statuses: ['aprobada_revisor', 'aprobada_gerencia', 'rechazada_gerencia', 'cotizada', 'en_orden_compra', 'pendiente_recepcion'],
+        });
+      }
+    } else if (roleName.includes('Director')) {
+      // Directores ven TODAS las requisiciones de subordinados directos
+      queryBuilder.where('requisition.createdBy IN (:...subordinateIds)', {
         subordinateIds,
-      })
-      .andWhere('requisition.status IN (:...statuses)', { statuses })
-      .orderBy('requisition.createdAt', 'ASC');
+      });
+    } else if (roleName === 'Compras') {
+      // Compras ve TODAS las requisiciones aprobadas por gerencia o en proceso de compras
+      queryBuilder.where('requisitionStatus.code IN (:...statuses)', {
+        statuses: ['aprobada_gerencia', 'cotizada', 'en_orden_compra', 'pendiente_recepcion'],
+      });
+    }
 
+    // Ordenar por fecha de creación
+    queryBuilder.orderBy('requisition.createdAt', 'DESC');
+
+    const [allRequisitions, total] = await queryBuilder.getManyAndCount();
+
+    // Separar en pendientes y procesadas según el rol
+    const pending: any[] = [];
+    const processed: any[] = [];
+
+    for (const req of allRequisitions) {
+      let isPending = false;
+      let lastActionDate = req.updatedAt || req.createdAt;
+      let lastActionLabel = 'Creada';
+
+      if (roleName.includes('Director')) {
+        // Pendiente si está en estado pendiente o en_revision
+        isPending = ['pendiente', 'en_revision'].includes(req.status.code);
+
+        // Si está procesada, buscar fecha de aprobación/rechazo por revisor
+        if (!isPending) {
+          const approval = req.approvals?.find(a =>
+            ['aprobada_revisor', 'rechazada_revisor'].includes(a.newStatus?.code)
+          );
+          if (approval) {
+            lastActionDate = approval.createdAt;
+            lastActionLabel = approval.newStatus.code === 'aprobada_revisor' ? 'Aprobada' : 'Rechazada';
+          } else {
+            // Si no hay approval pero el estado indica que fue procesada, usar el estado actual
+            if (req.status.code === 'aprobada_revisor') {
+              lastActionLabel = 'Aprobada por revisor';
+            } else if (req.status.code === 'rechazada_revisor') {
+              lastActionLabel = 'Rechazada por revisor';
+            } else if (req.status.code === 'aprobada_gerencia') {
+              lastActionLabel = 'Aprobada por gerencia';
+            } else if (req.status.code === 'rechazada_gerencia') {
+              lastActionLabel = 'Rechazada por gerencia';
+            }
+          }
+        }
+      } else if (roleName === 'Gerencia') {
+        // Pendiente si está aprobada por revisor o pendiente de subordinado
+        isPending = req.status.code === 'aprobada_revisor' ||
+                   (req.status.code === 'pendiente' && subordinateIds.includes(req.createdBy));
+
+        // Si está procesada, buscar fecha de aprobación/rechazo por gerencia
+        if (!isPending) {
+          const approval = req.approvals?.find(a =>
+            ['aprobada_gerencia', 'rechazada_gerencia'].includes(a.newStatus?.code)
+          );
+          if (approval) {
+            lastActionDate = approval.createdAt;
+            lastActionLabel = approval.newStatus.code === 'aprobada_gerencia' ? 'Aprobada' : 'Rechazada';
+          } else {
+            // Si no hay approval pero el estado indica que fue procesada, usar el estado actual
+            if (req.status.code === 'aprobada_gerencia') {
+              lastActionLabel = 'Aprobada por gerencia';
+            } else if (req.status.code === 'rechazada_gerencia') {
+              lastActionLabel = 'Rechazada por gerencia';
+            } else if (req.status.code === 'cotizada') {
+              lastActionLabel = 'Cotizada';
+            } else if (req.status.code === 'en_orden_compra') {
+              lastActionLabel = 'En orden de compra';
+            }
+          }
+        }
+      } else if (roleName === 'Compras') {
+        // Pendiente si está aprobada por gerencia (esperando cotización/orden)
+        isPending = req.status.code === 'aprobada_gerencia';
+
+        // Si está procesada, buscar fecha de cotización u orden
+        if (!isPending) {
+          const approval = req.approvals?.find(a =>
+            ['cotizada', 'en_orden_compra'].includes(a.newStatus?.code)
+          );
+          if (approval) {
+            lastActionDate = approval.createdAt;
+            lastActionLabel = approval.newStatus.code === 'cotizada' ? 'Cotizada' :
+                            approval.newStatus.code === 'en_orden_compra' ? 'En Orden de Compra' : 'Procesada';
+          } else {
+            // Si no hay approval pero el estado indica que fue procesada, usar el estado actual
+            if (req.status.code === 'cotizada') {
+              lastActionLabel = 'Cotizada';
+            } else if (req.status.code === 'en_orden_compra') {
+              lastActionLabel = 'En orden de compra';
+            } else if (req.status.code === 'pendiente_recepcion') {
+              lastActionLabel = 'Pendiente de recepción';
+            }
+          }
+        }
+      }
+
+      // Calcular SLA
+      const slaBusinessDays = getSLAForStatus(req.status.code);
+      let slaDeadline: Date | null = null;
+      let isOverdue = false;
+      let daysOverdue = 0;
+
+      if (slaBusinessDays > 0) {
+        // La fecha de inicio para el SLA es cuando la requisición entró al estado actual
+        // Buscar el approval que cambió al estado actual
+        const statusChangeApproval = req.approvals?.find(a =>
+          a.newStatus?.code === req.status.code
+        );
+
+        const slaStartDate = statusChangeApproval?.createdAt || req.createdAt;
+        const slaResult = calculateSLA(slaStartDate, slaBusinessDays);
+
+        slaDeadline = slaResult.deadline;
+        isOverdue = slaResult.isOverdue;
+        daysOverdue = slaResult.daysOverdue;
+      }
+
+      // Agregar metadata al objeto
+      const reqWithMeta = {
+        ...req,
+        isPending,
+        lastActionDate,
+        lastActionLabel,
+        slaDeadline,
+        isOverdue,
+        daysOverdue,
+      };
+
+      if (isPending) {
+        pending.push(reqWithMeta);
+      } else {
+        processed.push(reqWithMeta);
+      }
+    }
+
+    // Ordenar: pendientes primero (más antiguas primero), luego procesadas (más recientes primero)
+    pending.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    processed.sort((a, b) => new Date(b.lastActionDate).getTime() - new Date(a.lastActionDate).getTime());
+
+    // Combinar: pendientes primero, luego procesadas
+    const sortedRequisitions = [...pending, ...processed];
+
+    // Aplicar paginación
     const skip = (page - 1) * limit;
-    queryBuilder.skip(skip).take(limit);
-
-    const [requisitions, total] = await queryBuilder.getManyAndCount();
+    const paginatedData = sortedRequisitions.slice(skip, skip + limit);
 
     return {
-      data: requisitions,
-      total,
+      data: paginatedData,
+      total: sortedRequisitions.length,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(sortedRequisitions.length / limit),
+      pending: pending.length,
+      processed: processed.length,
     };
   }
 
@@ -486,7 +903,7 @@ export class PurchasesService {
   ) {
     const requisition = await this.requisitionRepository.findOne({
       where: { requisitionId },
-      relations: ['creator'],
+      relations: ['creator', 'status'],
     });
 
     if (!requisition) {
@@ -504,8 +921,8 @@ export class PurchasesService {
 
     // Validar estado actual
     if (
-      requisition.status !== 'pendiente' &&
-      requisition.status !== 'en_revision'
+      requisition.status.code !== 'pendiente' &&
+      requisition.status.code !== 'en_revision'
     ) {
       throw new BadRequestException(
         'Esta requisición no puede ser revisada en su estado actual',
@@ -517,22 +934,28 @@ export class PurchasesService {
     await queryRunner.startTransaction();
 
     try {
-      const previousStatus = requisition.status;
-      let newStatus: string;
+      const previousStatus = requisition.status.code;
+      let newStatusCode: string;
       let action: string;
 
       if (dto.decision === 'approve') {
         // Cambiar a estado "aprobada por revisor"
-        newStatus = 'aprobada_revisor';
+        newStatusCode = 'aprobada_revisor';
         action = 'revisar_aprobar';
       } else {
         // Rechazar
-        newStatus = 'rechazada_revisor';
+        newStatusCode = 'rechazada_revisor';
         action = 'revisar_rechazar';
       }
 
-      requisition.status = newStatus;
-      await queryRunner.manager.save(requisition);
+      const newStatusId = await this.getStatusIdByCode(newStatusCode);
+
+      // Actualizar la requisición con el nuevo estado
+      await queryRunner.manager.update(Requisition, requisitionId, {
+        statusId: newStatusId,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+      });
 
       // Registrar log
       const log = queryRunner.manager.create(RequisitionLog, {
@@ -540,13 +963,24 @@ export class PurchasesService {
         userId,
         action,
         previousStatus,
-        newStatus,
+        newStatus: newStatusCode,
         comments:
           dto.comments ||
           `Requisición ${dto.decision === 'approve' ? 'aprobada' : 'rechazada'} por revisor`,
       });
 
       await queryRunner.manager.save(log);
+
+      // Guardar aprobaciones de ítems si se proporcionaron
+      if (dto.itemDecisions && dto.itemDecisions.length > 0) {
+        await this.saveItemApprovals(
+          requisitionId,
+          userId,
+          'reviewer',
+          dto.itemDecisions,
+          queryRunner,
+        );
+      }
 
       await queryRunner.commitTransaction();
 
@@ -562,10 +996,11 @@ export class PurchasesService {
   async approveRequisition(
     requisitionId: number,
     userId: number,
-    dto: { comments?: string },
+    dto: { comments?: string; itemDecisions?: Array<{ itemId: number; decision: 'approve' | 'reject'; comments?: string }> },
   ) {
     const requisition = await this.requisitionRepository.findOne({
       where: { requisitionId },
+      relations: ['status'],
     });
 
     if (!requisition) {
@@ -582,10 +1017,12 @@ export class PurchasesService {
       throw new ForbiddenException('Solo Gerencia puede aprobar requisiciones');
     }
 
-    // Validar estado actual
-    if (requisition.status !== 'aprobada_revisor') {
+    // Validar estado actual: acepta 'pendiente' (para Directores de Área/Técnico)
+    // o 'aprobada_revisor' (para roles que pasaron por revisor)
+    const validStatuses = ['pendiente', 'aprobada_revisor'];
+    if (!validStatuses.includes(requisition.status.code)) {
       throw new BadRequestException(
-        'La requisición debe estar aprobada por un revisor primero',
+        `Esta requisición no puede ser aprobada en su estado actual: ${requisition.status.code}`,
       );
     }
 
@@ -594,9 +1031,15 @@ export class PurchasesService {
     await queryRunner.startTransaction();
 
     try {
-      const previousStatus = requisition.status;
-      requisition.status = 'aprobada_gerencia';
-      await queryRunner.manager.save(requisition);
+      const previousStatus = requisition.status.code;
+      const approvedStatusId = await this.getStatusIdByCode('aprobada_gerencia');
+
+      // Actualizar la requisición con el nuevo estado
+      await queryRunner.manager.update(Requisition, requisitionId, {
+        statusId: approvedStatusId,
+        approvedBy: userId,
+        approvedAt: new Date(),
+      });
 
       // Registrar log
       const log = queryRunner.manager.create(RequisitionLog, {
@@ -609,6 +1052,17 @@ export class PurchasesService {
       });
 
       await queryRunner.manager.save(log);
+
+      // Guardar aprobaciones de ítems si se proporcionaron
+      if (dto.itemDecisions && dto.itemDecisions.length > 0) {
+        await this.saveItemApprovals(
+          requisitionId,
+          userId,
+          'management',
+          dto.itemDecisions,
+          queryRunner,
+        );
+      }
 
       await queryRunner.commitTransaction();
 
@@ -628,6 +1082,7 @@ export class PurchasesService {
   ) {
     const requisition = await this.requisitionRepository.findOne({
       where: { requisitionId },
+      relations: ['status'],
     });
 
     if (!requisition) {
@@ -651,9 +1106,13 @@ export class PurchasesService {
     await queryRunner.startTransaction();
 
     try {
-      const previousStatus = requisition.status;
-      requisition.status = 'rechazada_gerencia';
-      await queryRunner.manager.save(requisition);
+      const previousStatus = requisition.status.code;
+      const rejectedStatusId = await this.getStatusIdByCode('rechazada_gerencia');
+
+      // Actualizar la requisición con el nuevo estado
+      await queryRunner.manager.update(Requisition, requisitionId, {
+        statusId: rejectedStatusId,
+      });
 
       // Registrar log
       const log = queryRunner.manager.create(RequisitionLog, {
@@ -785,9 +1244,1370 @@ export class PurchasesService {
       return true;
     }
 
-    // Verificar si es autorizador en la cadena
+    // Verificar si es autorizador directo
     const isAuthorizer = await this.isAuthorizer(userId, requisition.createdBy);
+    if (isAuthorizer) {
+      return true;
+    }
 
-    return isAuthorizer;
+    // Caso especial: Gerencia puede ver requisiciones aprobadas por revisores
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (user?.role.nombreRol === 'Gerencia') {
+      // Cargar el status si no está cargado
+      let status = requisition.status;
+      if (!status) {
+        const fullRequisition = await this.requisitionRepository.findOne({
+          where: { requisitionId: requisition.requisitionId },
+          relations: ['status'],
+        });
+        if (fullRequisition?.status) {
+          status = fullRequisition.status;
+        }
+      }
+
+      // Gerencia puede ver requisiciones pendientes, aprobadas por revisor, y las que ellos han procesado
+      if (
+        status?.code === 'aprobada_revisor' ||
+        status?.code === 'pendiente' ||
+        status?.code === 'aprobada_gerencia' ||
+        status?.code === 'rechazada_gerencia'
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  // ============================================
+  // MÉTODOS DE COTIZACIÓN
+  // ============================================
+
+  /**
+   * Lista todas las requisiciones aprobadas por gerencia (estado = 'aprobada_gerencia')
+   * listas para asignar cotizaciones.
+   */
+  async getRequisitionsForQuotation(userId: number, filters: FilterRequisitionsDto) {
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Validar que el usuario es del rol Compras
+    if (user.role.nombreRol !== 'Compras') {
+      throw new ForbiddenException(
+        'Solo el rol Compras puede gestionar cotizaciones',
+      );
+    }
+
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+
+    const queryBuilder = this.requisitionRepository
+      .createQueryBuilder('requisition')
+      .leftJoinAndSelect('requisition.status', 'requisitionStatus')
+      .leftJoinAndSelect('requisition.company', 'company')
+      .leftJoinAndSelect('requisition.project', 'project')
+      .leftJoinAndSelect('requisition.creator', 'creator')
+      .leftJoinAndSelect('creator.role', 'creatorRole')
+      .leftJoinAndSelect('requisition.items', 'items')
+      .leftJoinAndSelect('items.material', 'material')
+      // Join with approvals to calculate SLA deadlines
+      .leftJoinAndSelect('requisition.approvals', 'approvals')
+      .leftJoinAndSelect('approvals.user', 'approvalUser')
+      .leftJoinAndSelect('approvals.newStatus', 'approvalNewStatus')
+      .where('requisitionStatus.code IN (:...statuses)', {
+        statuses: ['aprobada_gerencia', 'en_cotizacion', 'cotizada']
+      })
+      .orderBy('requisition.createdAt', 'ASC');
+
+    const skip = (page - 1) * limit;
+    queryBuilder.skip(skip).take(limit);
+
+    const [requisitions, total] = await queryBuilder.getManyAndCount();
+
+    // Calcular SLA para cada requisición
+    const requisitionsWithSLA = requisitions.map(req => {
+      const slaBusinessDays = getSLAForStatus(req.status.code);
+      let slaDeadline: Date | null = null;
+      let isOverdue = false;
+      let daysOverdue = 0;
+
+      if (slaBusinessDays > 0) {
+        // La fecha de inicio para el SLA es cuando la requisición entró al estado actual
+        // Buscar el approval que cambió al estado actual
+        const statusChangeApproval = req.approvals?.find(a =>
+          a.newStatus?.code === req.status.code
+        );
+
+        const slaStartDate = statusChangeApproval?.createdAt || req.createdAt;
+        const slaResult = calculateSLA(slaStartDate, slaBusinessDays);
+
+        slaDeadline = slaResult.deadline;
+        isOverdue = slaResult.isOverdue;
+        daysOverdue = slaResult.daysOverdue;
+      }
+
+      return {
+        ...req,
+        slaDeadline,
+        isOverdue,
+        daysOverdue,
+      };
+    });
+
+    return {
+      data: requisitionsWithSLA,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Obtiene el detalle de una requisición con su información de cotización actual.
+   * Retorna los ítems con sus cotizaciones activas (última versión).
+   */
+  async getRequisitionQuotation(requisitionId: number, userId: number) {
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Validar que el usuario es del rol Compras
+    if (user.role.nombreRol !== 'Compras') {
+      throw new ForbiddenException(
+        'Solo el rol Compras puede gestionar cotizaciones',
+      );
+    }
+
+    const requisition = await this.requisitionRepository.findOne({
+      where: { requisitionId },
+      relations: [
+        'company',
+        'project',
+        'creator',
+        'creator.role',
+        'items',
+        'items.material',
+        'items.material.materialGroup',
+        'status',
+        'operationCenter',
+        'projectCode',
+      ],
+    });
+
+    if (!requisition) {
+      throw new NotFoundException('Requisición no encontrada');
+    }
+
+    // Validar estado - permitir editar hasta que se cree la orden de compra
+    const validStatuses = ['aprobada_gerencia', 'en_cotizacion', 'cotizada'];
+    if (!validStatuses.includes(requisition.status.code)) {
+      throw new BadRequestException(
+        'Esta requisición no está disponible para cotización. Solo se pueden gestionar requisiciones aprobadas por gerencia que aún no tienen órdenes de compra.',
+      );
+    }
+
+    // Obtener cotizaciones activas para cada ítem
+    const itemsWithQuotations = await Promise.all(
+      requisition.items.map(async (item) => {
+        const quotations = await this.quotationRepository.find({
+          where: {
+            requisitionItemId: item.itemId,
+            isActive: true,
+          },
+          relations: ['supplier'],
+          order: { supplierOrder: 'ASC' },
+        });
+
+        return {
+          ...item,
+          quotations,
+        };
+      }),
+    );
+
+    return {
+      ...requisition,
+      items: itemsWithQuotations,
+    };
+  }
+
+  /**
+   * Gestiona las cotizaciones de una requisición.
+   * - Permite asignar acción (cotizar/no_requiere) a cada ítem
+   * - Soporta hasta 2 proveedores por ítem
+   * - Implementa versionamiento al cambiar proveedores
+   * - Cambia estado a 'en_cotizacion' automáticamente
+   * - Cambia a 'cotizada' cuando todos los ítems tienen acción asignada
+   */
+  async manageQuotation(
+    requisitionId: number,
+    userId: number,
+    dto: ManageQuotationDto,
+  ) {
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // Validar que el usuario es del rol Compras
+    if (user.role.nombreRol !== 'Compras') {
+      throw new ForbiddenException(
+        'Solo el rol Compras puede gestionar cotizaciones',
+      );
+    }
+
+    const requisition = await this.requisitionRepository.findOne({
+      where: { requisitionId },
+      relations: ['items', 'status'],
+    });
+
+    if (!requisition) {
+      throw new NotFoundException('Requisición no encontrada');
+    }
+
+    // Validar estado - permitir editar hasta que se cree la orden de compra
+    const validStatuses = ['aprobada_gerencia', 'en_cotizacion', 'cotizada'];
+    if (!validStatuses.includes(requisition.status.code)) {
+      throw new BadRequestException(
+        `Esta requisición no está disponible para cotización. Estado actual: ${requisition.status.code}. Solo se pueden gestionar requisiciones en estado: aprobada_gerencia, en_cotizacion, o cotizada (sin órdenes de compra).`,
+      );
+    }
+
+    // FIX #1: Verificar que no existan órdenes de compra ya creadas
+    const existingOrdersCount = await this.purchaseOrderRepository.count({
+      where: { requisitionId },
+    });
+
+    if (existingOrdersCount > 0) {
+      throw new BadRequestException(
+        `No se pueden modificar las cotizaciones porque ya existen ${existingOrdersCount} orden(es) de compra creada(s) para esta requisición.`,
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const previousStatus = requisition.status.code;
+
+      // Procesar cada ítem
+      for (const itemDto of dto.items) {
+        const item = requisition.items.find((i) => i.itemId === itemDto.itemId);
+
+        if (!item) {
+          throw new BadRequestException(
+            `Ítem con ID ${itemDto.itemId} no encontrado en la requisición`,
+          );
+        }
+
+        // Obtener cotizaciones activas actuales
+        const currentQuotations = await queryRunner.manager.find(
+          RequisitionItemQuotation,
+          {
+            where: {
+              requisitionItemId: item.itemId,
+              isActive: true,
+            },
+          },
+        );
+
+        // Determinar si hay cambios en proveedores (para versioning)
+        let needsNewVersion = false;
+
+        if (itemDto.action === 'cotizar' && itemDto.suppliers) {
+          const currentSupplierIds = currentQuotations
+            .filter((q) => q.action === 'cotizar')
+            .map((q) => q.supplierId)
+            .sort();
+          const newSupplierIds = itemDto.suppliers
+            .map((s) => s.supplierId)
+            .sort();
+
+          needsNewVersion =
+            currentSupplierIds.length > 0 &&
+            JSON.stringify(currentSupplierIds) !==
+              JSON.stringify(newSupplierIds);
+        }
+
+        // Si hay cambios, desactivar versiones anteriores
+        if (needsNewVersion || (currentQuotations.length > 0 && currentQuotations[0].action !== itemDto.action)) {
+          await queryRunner.manager.update(
+            RequisitionItemQuotation,
+            { requisitionItemId: item.itemId, isActive: true },
+            { isActive: false },
+          );
+        }
+
+        // Calcular nueva versión
+        const maxVersion = currentQuotations.reduce(
+          (max, q) => Math.max(max, q.version),
+          0,
+        );
+        const newVersion = needsNewVersion ? maxVersion + 1 : maxVersion || 1;
+
+        // Crear nuevas cotizaciones
+        if (itemDto.action === 'cotizar' && itemDto.suppliers) {
+          // Validar que los proveedores existen
+          for (const supplierDto of itemDto.suppliers) {
+            const supplier = await queryRunner.manager.findOne(Supplier, {
+              where: { supplierId: supplierDto.supplierId, isActive: true },
+            });
+
+            if (!supplier) {
+              throw new BadRequestException(
+                `Proveedor con ID ${supplierDto.supplierId} no encontrado o inactivo`,
+              );
+            }
+
+            const quotation = queryRunner.manager.create(
+              RequisitionItemQuotation,
+              {
+                requisitionItemId: item.itemId,
+                action: 'cotizar',
+                supplierId: supplierDto.supplierId,
+                supplierOrder: supplierDto.supplierOrder,
+                observations: supplierDto.observations,
+                version: newVersion,
+                isActive: true,
+                createdBy: userId,
+              },
+            );
+
+            await queryRunner.manager.save(quotation);
+          }
+        } else if (itemDto.action === 'no_requiere') {
+          // Crear cotización con justificación
+          const quotation = queryRunner.manager.create(
+            RequisitionItemQuotation,
+            {
+              requisitionItemId: item.itemId,
+              action: 'no_requiere',
+              supplierId: null,
+              supplierOrder: 1,
+              justification: itemDto.justification,
+              version: newVersion,
+              isActive: true,
+              createdBy: userId,
+            },
+          );
+
+          await queryRunner.manager.save(quotation);
+        }
+      }
+
+      // Verificar si todos los ítems tienen acción asignada
+      const totalItems = requisition.items.length;
+
+      // Contar ítems ÚNICOS que tienen quotations activas (no el total de quotations)
+      const itemsWithActionRaw = await queryRunner.manager
+        .createQueryBuilder(RequisitionItemQuotation, 'q')
+        .select('DISTINCT q.requisitionItemId', 'itemId')
+        .where('q.requisitionItemId IN (:...itemIds)', {
+          itemIds: requisition.items.map((i) => i.itemId),
+        })
+        .andWhere('q.isActive = :isActive', { isActive: true })
+        .getRawMany();
+
+      const itemsWithAction = itemsWithActionRaw.length;
+
+      // DEBUG: Log para ver qué está pasando
+      console.log('🔍 DEBUG - Verificación de estado:');
+      console.log(`  Total de ítems en requisición: ${totalItems}`);
+      console.log(`  Ítems con quotations activas: ${itemsWithAction}`);
+      console.log(`  IDs de ítems con action:`, itemsWithActionRaw);
+
+      // Determinar nuevo estado
+      let newStatusCode: string;
+      if (itemsWithAction === totalItems) {
+        // Todos los ítems tienen acción asignada
+        newStatusCode = 'cotizada';
+        console.log(`  ✅ Estado cambiará a: ${newStatusCode}`);
+      } else {
+        // Todavía faltan ítems por asignar
+        newStatusCode = 'en_cotizacion';
+        console.log(`  ⏳ Estado cambiará a: ${newStatusCode}`);
+      }
+
+      // Actualizar estado de la requisición
+      const newStatusId = await this.getStatusIdByCode(newStatusCode);
+      await queryRunner.manager.update(
+        Requisition,
+        { requisitionId },
+        { statusId: newStatusId },
+      );
+      console.log(`  💾 Estado actualizado en BD: requisitionId=${requisitionId}, newStatusId=${newStatusId}`);
+
+      // Registrar log
+      const log = queryRunner.manager.create(RequisitionLog, {
+        requisitionId,
+        userId,
+        action: 'gestionar_cotizacion',
+        previousStatus,
+        newStatus: newStatusCode,
+        comments: `Cotizaciones actualizadas para ${dto.items.length} ítems`,
+      });
+
+      await queryRunner.manager.save(log);
+
+      await queryRunner.commitTransaction();
+
+      // Retornar requisición actualizada con cotizaciones
+      return this.getRequisitionQuotation(requisitionId, userId);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  // ============================================
+  // ASIGNAR PRECIOS A COTIZACIONES
+  // ============================================
+  async assignPrices(
+    requisitionId: number,
+    userId: number,
+    dto: any, // AssignPricesDto
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Verificar que la requisición existe y está en estado "cotizada"
+      const requisition = await queryRunner.manager.findOne(Requisition, {
+        where: { requisitionId },
+        relations: ['status', 'operationCenter'],
+      });
+
+      if (!requisition) {
+        throw new NotFoundException(
+          `Requisición con ID ${requisitionId} no encontrada`,
+        );
+      }
+
+      if (requisition.status.code !== 'cotizada') {
+        throw new BadRequestException(
+          `Solo se pueden asignar precios a requisiciones en estado "cotizada". Estado actual: ${requisition.status.code}`,
+        );
+      }
+
+      // 2. Verificar que no existan órdenes de compra ya creadas
+      const existingOrdersCount = await this.purchaseOrderRepository.count({
+        where: { requisitionId },
+      });
+
+      if (existingOrdersCount > 0) {
+        throw new BadRequestException(
+          `No se pueden asignar precios porque ya existen ${existingOrdersCount} orden(es) de compra creada(s) para esta requisición.`,
+        );
+      }
+
+      // 3. Procesar cada ítem
+      for (const itemDto of dto.items) {
+        // Obtener las cotizaciones activas para este ítem
+        const quotations = await queryRunner.manager.find(
+          RequisitionItemQuotation,
+          {
+            where: {
+              requisitionItemId: itemDto.itemId,
+              isActive: true,
+              action: 'cotizar',
+            },
+          },
+        );
+
+        if (quotations.length === 0) {
+          throw new BadRequestException(
+            `No se encontraron cotizaciones activas para el ítem ${itemDto.itemId}`,
+          );
+        }
+
+        // Si se especificó un quotationId, actualizar ese; sino, actualizar el primero
+        let targetQuotation = quotations[0];
+        if (itemDto.quotationId) {
+          const foundQuotation = quotations.find(
+            (q) => q.quotationId === itemDto.quotationId,
+          );
+          if (!foundQuotation) {
+            throw new BadRequestException(
+              `Cotización ${itemDto.quotationId} no encontrada o no activa para el ítem ${itemDto.itemId}`,
+            );
+          }
+          targetQuotation = foundQuotation;
+        }
+
+        // Actualizar precios en la cotización seleccionada
+        await queryRunner.manager.update(
+          RequisitionItemQuotation,
+          { quotationId: targetQuotation.quotationId },
+          {
+            unitPrice: itemDto.unitPrice,
+            hasIva: itemDto.hasIva,
+            discount: itemDto.discount || 0,
+            isSelected: true,
+          },
+        );
+
+        // Si hay múltiples cotizaciones, marcar las demás como no seleccionadas
+        if (quotations.length > 1) {
+          const otherQuotations = quotations.filter(
+            (q) => q.quotationId !== targetQuotation.quotationId,
+          );
+          for (const otherQuotation of otherQuotations) {
+            await queryRunner.manager.update(
+              RequisitionItemQuotation,
+              { quotationId: otherQuotation.quotationId },
+              { isSelected: false },
+            );
+          }
+        }
+      }
+
+      // 4. Registrar log
+      const log = queryRunner.manager.create(RequisitionLog, {
+        requisitionId,
+        userId,
+        action: 'asignar_precios',
+        previousStatus: requisition.status.code,
+        newStatus: requisition.status.code,
+        comments: `Precios asignados a ${dto.items.length} ítem(s)`,
+      });
+
+      await queryRunner.manager.save(log);
+
+      await queryRunner.commitTransaction();
+
+      // Retornar requisición actualizada con cotizaciones y precios
+      return this.getRequisitionQuotation(requisitionId, userId);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  // ============================================
+  // CREAR ÓRDENES DE COMPRA
+  // ============================================
+  async createPurchaseOrders(
+    requisitionId: number,
+    userId: number,
+    dto: CreatePurchaseOrdersDto,
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Verificar que la requisición existe y está en estado "cotizada"
+      const requisition = await queryRunner.manager.findOne(Requisition, {
+        where: { requisitionId },
+        relations: [
+          'items',
+          'items.material',
+          'operationCenter',
+          'operationCenter.company',
+          'status',
+        ],
+      });
+
+      if (!requisition) {
+        throw new NotFoundException('Requisición no encontrada');
+      }
+
+      if (requisition.status.code !== 'cotizada') {
+        throw new BadRequestException(
+          'La requisición debe estar en estado "cotizada" para generar órdenes de compra',
+        );
+      }
+
+      // 2. Obtener las cotizaciones activas para los ítems
+      const itemIds = dto.items.map((i) => i.itemId);
+      const quotations = await queryRunner.manager.find(
+        RequisitionItemQuotation,
+        {
+          where: {
+            requisitionItemId: In(itemIds),
+            isActive: true,
+          },
+          relations: ['requisitionItem', 'supplier'],
+        },
+      );
+
+      // 3. Agrupar ítems por supplierId
+      const itemsBySupplier = new Map<
+        number,
+        Array<{
+          item: typeof dto.items[0];
+          quotation: RequisitionItemQuotation;
+        }>
+      >();
+
+      for (const itemDto of dto.items) {
+        const quotation = quotations.find(
+          (q) =>
+            q.requisitionItemId === itemDto.itemId &&
+            q.supplierId === itemDto.supplierId,
+        );
+
+        if (!quotation) {
+          throw new NotFoundException(
+            `No se encontró cotización activa para el ítem ${itemDto.itemId} del proveedor ${itemDto.supplierId}`,
+          );
+        }
+
+        if (!itemsBySupplier.has(itemDto.supplierId)) {
+          itemsBySupplier.set(itemDto.supplierId, []);
+        }
+
+        itemsBySupplier
+          .get(itemDto.supplierId)!
+          .push({ item: itemDto, quotation });
+      }
+
+      // 4. Crear una orden de compra por cada proveedor
+      const createdPurchaseOrders: PurchaseOrder[] = [];
+
+      for (const [supplierId, items] of itemsBySupplier.entries()) {
+        // 4.1 Generar número de orden de compra
+        const operationCenterId = requisition.operationCenter.centerId;
+        const operationCenterCode = requisition.operationCenter.code;
+        const companyName = requisition.operationCenter.company.name;
+
+        // Determinar tipo: OC si contiene "Unión Temporal", sino OS
+        const orderType = companyName.includes('Unión Temporal') ? 'OC' : 'OS';
+
+        // Obtener o crear secuencia para este operation_center
+        let sequence = await queryRunner.manager.findOne(
+          PurchaseOrderSequence,
+          {
+            where: { operationCenterId },
+            lock: { mode: 'pessimistic_write' },
+          },
+        );
+
+        if (!sequence) {
+          sequence = queryRunner.manager.create(PurchaseOrderSequence, {
+            operationCenterId,
+            lastNumber: 0,
+          });
+        }
+
+        // Incrementar consecutivo
+        sequence.lastNumber += 1;
+        await queryRunner.manager.save(sequence);
+
+        // Formatear número: {code}-{OC/OS}-{consecutive}
+        const consecutiveStr = sequence.lastNumber.toString().padStart(4, '0');
+        const purchaseOrderNumber = `${operationCenterCode}-${orderType}-${consecutiveStr}`;
+
+        // 4.2 Calcular totales para la orden
+        let orderSubtotal = 0;
+        let orderTotalIva = 0;
+        let orderTotalDiscount = 0;
+
+        const orderItems: Array<{
+          requisitionItemId: number;
+          quotationId: number;
+          quantity: number;
+          unitPrice: number;
+          hasIva: boolean;
+          ivaPercentage: number;
+          subtotal: number;
+          ivaAmount: number;
+          discount: number;
+          totalAmount: number;
+        }> = [];
+
+        for (const { item, quotation } of items) {
+          const quantity = quotation.requisitionItem.quantity;
+          const unitPrice = item.unitPrice;
+          const hasIva = item.hasIVA ?? true;
+          const discount = item.discount ?? 0;
+
+          const subtotal = quantity * unitPrice;
+          const ivaAmount = hasIva ? subtotal * 0.19 : 0;
+          const totalAmount = subtotal + ivaAmount - discount;
+
+          orderSubtotal += subtotal;
+          orderTotalIva += ivaAmount;
+          orderTotalDiscount += discount;
+
+          orderItems.push({
+            requisitionItemId: quotation.requisitionItemId,
+            quotationId: quotation.quotationId,
+            quantity,
+            unitPrice,
+            hasIva,
+            ivaPercentage: 19,
+            subtotal,
+            ivaAmount,
+            discount,
+            totalAmount,
+          });
+        }
+
+        const orderTotalAmount =
+          orderSubtotal + orderTotalIva - orderTotalDiscount;
+
+        // 4.3 Crear la orden de compra
+        const purchaseOrder = queryRunner.manager.create(PurchaseOrder, {
+          purchaseOrderNumber,
+          requisitionId,
+          supplierId,
+          issueDate: dto.issueDate ? new Date(dto.issueDate) : new Date(),
+          subtotal: orderSubtotal,
+          totalIva: orderTotalIva,
+          totalDiscount: orderTotalDiscount,
+          totalAmount: orderTotalAmount,
+          createdBy: userId,
+        });
+
+        await queryRunner.manager.save(purchaseOrder);
+
+        // 4.4 Crear los ítems de la orden
+        for (const itemData of orderItems) {
+          const poItem = queryRunner.manager.create(PurchaseOrderItem, {
+            purchaseOrderId: purchaseOrder.purchaseOrderId,
+            ...itemData,
+          });
+          await queryRunner.manager.save(poItem);
+        }
+
+        createdPurchaseOrders.push(purchaseOrder);
+      }
+
+      // 5. Cambiar estado de la requisición a "pendiente_recepcion"
+      const previousStatus = requisition.status.code;
+      const newStatusId = await this.getStatusIdByCode('pendiente_recepcion');
+
+      // Usar UPDATE explícito para garantizar que se ejecute la query
+      await queryRunner.manager.update(
+        Requisition,
+        { requisitionId },
+        { statusId: newStatusId }
+      );
+
+      // 6. Registrar log
+      const log = queryRunner.manager.create(RequisitionLog, {
+        requisitionId,
+        userId,
+        action: 'crear_ordenes_compra',
+        previousStatus,
+        newStatus: 'pendiente_recepcion',
+        comments: `Se generaron ${createdPurchaseOrders.length} orden(es) de compra`,
+      });
+      await queryRunner.manager.save(log);
+
+      await queryRunner.commitTransaction();
+
+      // 7. Retornar órdenes creadas con relaciones completas
+      const ordersWithRelations = await this.purchaseOrderRepository.find({
+        where: {
+          purchaseOrderId: In(
+            createdPurchaseOrders.map((po) => po.purchaseOrderId),
+          ),
+        },
+        relations: ['supplier', 'items', 'items.requisitionItem', 'creator'],
+      });
+
+      return {
+        requisitionId,
+        previousStatus,
+        newStatus: 'pendiente_recepcion',
+        purchaseOrders: ordersWithRelations,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  // ============================================
+  // MATERIAL RECEIPTS - RECEPCIÓN DE MATERIALES
+  // ============================================
+
+  /**
+   * Listar requisiciones pendientes de recepción del usuario autenticado
+   */
+  async getMyPendingReceipts(userId: number, filters: FilterRequisitionsDto) {
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    const skip = (page - 1) * limit;
+
+    // Obtener requisiciones del usuario en estado pendiente_recepcion o en_recepcion
+    const queryBuilder = this.requisitionRepository
+      .createQueryBuilder('requisition')
+      .leftJoinAndSelect('requisition.status', 'status')
+      .leftJoinAndSelect('requisition.company', 'company')
+      .leftJoinAndSelect('requisition.project', 'project')
+      .leftJoinAndSelect('requisition.purchaseOrders', 'purchaseOrders')
+      .leftJoinAndSelect('purchaseOrders.supplier', 'supplier')
+      .leftJoinAndSelect('purchaseOrders.items', 'items')
+      .leftJoinAndSelect('items.requisitionItem', 'requisitionItem')
+      .leftJoinAndSelect('requisitionItem.material', 'material')
+      .leftJoinAndSelect('items.receipts', 'receipts')
+      .where('requisition.createdBy = :userId', { userId })
+      .andWhere('status.code IN (:...statuses)', {
+        statuses: ['pendiente_recepcion', 'en_recepcion'],
+      })
+      .orderBy('requisition.createdAt', 'ASC')
+      .skip(skip)
+      .take(limit);
+
+    const [data, total] = await queryBuilder.getManyAndCount();
+
+    // Calcular cantidades recibidas vs ordenadas para cada ítem
+    const dataWithReceiptInfo = data.map((requisition: any) => ({
+      ...requisition,
+      purchaseOrders: (requisition.purchaseOrders || []).map((po: any) => ({
+        ...po,
+        items: (po.items || []).map((item: any) => {
+          const totalReceived = item.receipts?.reduce(
+            (sum: number, receipt: any) => sum + Number(receipt.quantityReceived),
+            0,
+          ) || 0;
+
+          return {
+            ...item,
+            quantityOrdered: Number(item.quantity),
+            quantityReceived: totalReceived,
+            quantityPending: Number(item.quantity) - totalReceived,
+            receipts: item.receipts, // Mantener receipts para info adicional
+          };
+        }),
+      })),
+    }));
+
+    return {
+      data: dataWithReceiptInfo,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Ver recepciones de una requisición específica
+   */
+  async getRequisitionReceipts(requisitionId: number, userId: number) {
+    // Verificar que la requisición existe y pertenece al usuario
+    const requisition = await this.requisitionRepository.findOne({
+      where: { requisitionId },
+      relations: [
+        'status',
+        'purchaseOrders',
+        'purchaseOrders.supplier',
+        'purchaseOrders.items',
+        'purchaseOrders.items.requisitionItem',
+        'purchaseOrders.items.requisitionItem.material',
+        'purchaseOrders.items.receipts',
+        'purchaseOrders.items.receipts.creator',
+      ],
+    });
+
+    if (!requisition) {
+      throw new NotFoundException('Requisición no encontrada');
+    }
+
+    if (requisition.createdBy !== userId) {
+      throw new ForbiddenException(
+        'No tiene permiso para ver las recepciones de esta requisición',
+      );
+    }
+
+    // Verificar que la requisición esté en proceso de recepción
+    if (
+      !['pendiente_recepcion', 'en_recepcion', 'recepcion_completa'].includes(
+        requisition.status.code,
+      )
+    ) {
+      throw new BadRequestException(
+        'Esta requisición no está en proceso de recepción',
+      );
+    }
+
+    // Calcular totales
+    const dataWithReceiptInfo = {
+      ...requisition,
+      purchaseOrders: (requisition as any).purchaseOrders?.map((po: any) => ({
+        ...po,
+        items: (po.items || []).map((item: any) => {
+          const totalReceived = item.receipts?.reduce(
+            (sum: number, receipt: any) => sum + Number(receipt.quantityReceived),
+            0,
+          ) || 0;
+
+          return {
+            ...item,
+            quantityOrdered: Number(item.quantity),
+            quantityReceived: totalReceived,
+            quantityPending: Number(item.quantity) - totalReceived,
+          };
+        }),
+      })) || [],
+    };
+
+    return dataWithReceiptInfo;
+  }
+
+  /**
+   * Crear recepciones de materiales
+   */
+  async createMaterialReceipts(
+    requisitionId: number,
+    userId: number,
+    dto: CreateMaterialReceiptDto,
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Verificar que la requisición existe y pertenece al usuario
+      const requisition = await queryRunner.manager.findOne(Requisition, {
+        where: { requisitionId },
+        relations: ['status', 'purchaseOrders', 'purchaseOrders.items'],
+      });
+
+      if (!requisition) {
+        throw new NotFoundException('Requisición no encontrada');
+      }
+
+      if (requisition.createdBy !== userId) {
+        throw new ForbiddenException(
+          'Solo el creador de la requisición puede registrar recepciones',
+        );
+      }
+
+      // 2. Verificar estado
+      if (
+        !['pendiente_recepcion', 'en_recepcion'].includes(
+          requisition.status.code,
+        )
+      ) {
+        throw new BadRequestException(
+          'Esta requisición no está disponible para recepción de materiales',
+        );
+      }
+
+      const previousStatus = requisition.status.code;
+      const createdReceipts: MaterialReceipt[] = [];
+
+      // 3. Procesar cada ítem de recepción
+      for (const itemDto of dto.items) {
+        // Validar que el poItem existe y pertenece a esta requisición
+        const poItem = await queryRunner.manager.findOne(PurchaseOrderItem, {
+          where: { poItemId: itemDto.poItemId },
+          relations: ['purchaseOrder', 'receipts'],
+        });
+
+        if (!poItem) {
+          throw new BadRequestException(
+            `Ítem de orden de compra ${itemDto.poItemId} no encontrado`,
+          );
+        }
+
+        if (poItem.purchaseOrder.requisitionId !== requisitionId) {
+          throw new BadRequestException(
+            `El ítem ${itemDto.poItemId} no pertenece a esta requisición`,
+          );
+        }
+
+        // Calcular cantidad ya recibida
+        const totalReceived = poItem.receipts?.reduce(
+          (sum, receipt) => sum + Number(receipt.quantityReceived),
+          0,
+        ) || 0;
+
+        const quantityOrdered = Number(poItem.quantity);
+        const quantityPending = quantityOrdered - totalReceived;
+
+        // Validar sobreentrega
+        if (itemDto.quantityReceived > quantityPending) {
+          // Es una sobreentrega
+          if (!itemDto.overdeliveryJustification) {
+            throw new BadRequestException(
+              `El ítem ${itemDto.poItemId} tiene una sobreentrega (recibiendo ${itemDto.quantityReceived}, pendiente ${quantityPending}). Debe proporcionar una justificación.`,
+            );
+          }
+        }
+
+        // Crear recepción
+        const receipt = queryRunner.manager.create(MaterialReceipt, {
+          poItemId: itemDto.poItemId,
+          quantityReceived: itemDto.quantityReceived,
+          receivedDate: itemDto.receivedDate,
+          observations: itemDto.observations,
+          overdeliveryJustification: itemDto.overdeliveryJustification,
+          createdBy: userId,
+        });
+
+        const savedReceipt = await queryRunner.manager.save(receipt);
+        createdReceipts.push(savedReceipt);
+      }
+
+      // 4. Verificar si todos los ítems están completos
+      const allPOItems = (requisition as any).purchaseOrders?.flatMap((po: any) => po.items) || [];
+
+      let allItemsComplete = true;
+      for (const poItem of allPOItems) {
+        // Recargar ítems con receipts actualizados
+        const itemWithReceipts = await queryRunner.manager.findOne(
+          PurchaseOrderItem,
+          {
+            where: { poItemId: poItem.poItemId },
+            relations: ['receipts'],
+          },
+        );
+
+        if (!itemWithReceipts) {
+          continue;
+        }
+
+        const totalReceived = itemWithReceipts.receipts?.reduce(
+          (sum, receipt) => sum + Number(receipt.quantityReceived),
+          0,
+        ) || 0;
+
+        if (totalReceived < Number(itemWithReceipts.quantity)) {
+          allItemsComplete = false;
+          break;
+        }
+      }
+
+      // 5. Actualizar estado de requisición
+      let newStatusCode: string;
+      if (allItemsComplete) {
+        newStatusCode = 'recepcion_completa';
+      } else {
+        newStatusCode = 'en_recepcion';
+      }
+
+      const newStatusId = await this.getStatusIdByCode(newStatusCode);
+      await queryRunner.manager.update(
+        Requisition,
+        { requisitionId },
+        { statusId: newStatusId },
+      );
+
+      // 6. Registrar log
+      const log = queryRunner.manager.create(RequisitionLog, {
+        requisitionId,
+        userId,
+        action: 'registrar_recepcion',
+        previousStatus,
+        newStatus: newStatusCode,
+        comments: `Recepción registrada para ${dto.items.length} ítem(s)`,
+      });
+      await queryRunner.manager.save(log);
+
+      await queryRunner.commitTransaction();
+
+      // 7. Retornar la requisición actualizada con recepciones
+      return this.getRequisitionReceipts(requisitionId, userId);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Actualizar una recepción de material
+   */
+  async updateMaterialReceipt(
+    requisitionId: number,
+    receiptId: number,
+    userId: number,
+    dto: UpdateMaterialReceiptDto,
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Verificar que la recepción existe
+      const receipt = await queryRunner.manager.findOne(MaterialReceipt, {
+        where: { receiptId },
+        relations: ['purchaseOrderItem', 'purchaseOrderItem.purchaseOrder'],
+      });
+
+      if (!receipt) {
+        throw new NotFoundException('Recepción no encontrada');
+      }
+
+      // 2. Verificar que pertenece a la requisición correcta
+      if (
+        receipt.purchaseOrderItem.purchaseOrder.requisitionId !==
+        requisitionId
+      ) {
+        throw new BadRequestException(
+          'Esta recepción no pertenece a la requisición especificada',
+        );
+      }
+
+      // 3. Verificar permisos
+      const requisition = await queryRunner.manager.findOne(Requisition, {
+        where: { requisitionId },
+      });
+
+      if (!requisition) {
+        throw new NotFoundException('Requisición no encontrada');
+      }
+
+      if (requisition.createdBy !== userId) {
+        throw new ForbiddenException(
+          'Solo el creador de la requisición puede editar recepciones',
+        );
+      }
+
+      // 4. Si se actualiza la cantidad, validar sobreentrega
+      if (dto.quantityReceived !== undefined) {
+        const poItem = receipt.purchaseOrderItem;
+        const allReceipts = await queryRunner.manager.find(MaterialReceipt, {
+          where: { poItemId: poItem.poItemId },
+        });
+
+        const totalOtherReceipts = allReceipts
+          .filter((r) => r.receiptId !== receiptId)
+          .reduce((sum, r) => sum + Number(r.quantityReceived), 0);
+
+        const newTotal = totalOtherReceipts + dto.quantityReceived;
+        const quantityOrdered = Number(poItem.quantity);
+
+        if (newTotal > quantityOrdered) {
+          // Es sobreentrega
+          if (
+            !dto.overdeliveryJustification &&
+            !receipt.overdeliveryJustification
+          ) {
+            throw new BadRequestException(
+              'La nueva cantidad genera una sobreentrega. Debe proporcionar una justificación.',
+            );
+          }
+        }
+      }
+
+      // 5. Actualizar recepción
+      Object.assign(receipt, dto);
+      await queryRunner.manager.save(receipt);
+
+      // 6. Recalcular estado de requisición
+      const allPOItems = await queryRunner.manager
+        .createQueryBuilder(PurchaseOrderItem, 'poItem')
+        .leftJoin('poItem.purchaseOrder', 'po')
+        .leftJoinAndSelect('poItem.receipts', 'receipts')
+        .where('po.requisition_id = :requisitionId', { requisitionId })
+        .getMany();
+
+      let allItemsComplete = true;
+      for (const poItem of allPOItems) {
+        const totalReceived = poItem.receipts?.reduce(
+          (sum, r) => sum + Number(r.quantityReceived),
+          0,
+        ) || 0;
+
+        if (totalReceived < Number(poItem.quantity)) {
+          allItemsComplete = false;
+          break;
+        }
+      }
+
+      const newStatusCode = allItemsComplete
+        ? 'recepcion_completa'
+        : 'en_recepcion';
+      const newStatusId = await this.getStatusIdByCode(newStatusCode);
+
+      await queryRunner.manager.update(
+        Requisition,
+        { requisitionId },
+        { statusId: newStatusId },
+      );
+
+      await queryRunner.commitTransaction();
+
+      // Retornar recepción actualizada
+      return queryRunner.manager.findOne(MaterialReceipt, {
+        where: { receiptId },
+        relations: [
+          'purchaseOrderItem',
+          'purchaseOrderItem.requisitionItem',
+          'purchaseOrderItem.requisitionItem.material',
+          'creator',
+        ],
+      });
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  // ============================================
+  // CONSULTAR ÓRDENES DE COMPRA
+  // ============================================
+
+  /**
+   * Obtener todas las órdenes de compra con paginación y filtros
+   */
+  async getPurchaseOrders(
+    userId: number,
+    page: number = 1,
+    limit: number = 10,
+    filters?: {
+      requisitionId?: number;
+      supplierId?: number;
+      fromDate?: string;
+      toDate?: string;
+    },
+  ) {
+    const skip = (page - 1) * limit;
+
+    // Construir condiciones de filtro
+    const where: any = {};
+
+    if (filters?.requisitionId) {
+      where.requisitionId = filters.requisitionId;
+    }
+
+    if (filters?.supplierId) {
+      where.supplierId = filters.supplierId;
+    }
+
+    if (filters?.fromDate && filters?.toDate) {
+      where.issueDate = Between(
+        new Date(filters.fromDate),
+        new Date(filters.toDate),
+      );
+    } else if (filters?.fromDate) {
+      where.issueDate = Between(new Date(filters.fromDate), new Date());
+    }
+
+    // Consultar órdenes con relaciones
+    const [purchaseOrders, total] = await this.purchaseOrderRepository.findAndCount({
+      where,
+      relations: [
+        'requisition',
+        'requisition.operationCenter',
+        'requisition.operationCenter.company',
+        'supplier',
+        'creator',
+        'items',
+        'items.requisitionItem',
+        'items.requisitionItem.material',
+      ],
+      order: {
+        createdAt: 'DESC',
+      },
+      take: limit,
+      skip,
+    });
+
+    return {
+      data: purchaseOrders,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Obtener detalle de una orden de compra específica
+   */
+  async getPurchaseOrderById(purchaseOrderId: number) {
+    const purchaseOrder = await this.purchaseOrderRepository.findOne({
+      where: { purchaseOrderId },
+      relations: [
+        'requisition',
+        'requisition.operationCenter',
+        'requisition.operationCenter.company',
+        'requisition.projectCode',
+        'requisition.status',
+        'supplier',
+        'creator',
+        'items',
+        'items.requisitionItem',
+        'items.requisitionItem.material',
+        'items.quotation',
+      ],
+    });
+
+    if (!purchaseOrder) {
+      throw new NotFoundException(
+        `Orden de compra con ID ${purchaseOrderId} no encontrada`,
+      );
+    }
+
+    return purchaseOrder;
+  }
+
+  /**
+   * Obtener órdenes de compra de una requisición específica
+   */
+  async getPurchaseOrdersByRequisition(requisitionId: number, userId: number) {
+    // Verificar que la requisición existe
+    const requisition = await this.requisitionRepository.findOne({
+      where: { requisitionId },
+      relations: ['status'],
+    });
+
+    if (!requisition) {
+      throw new NotFoundException(
+        `Requisición con ID ${requisitionId} no encontrada`,
+      );
+    }
+
+    // Obtener órdenes de compra de la requisición
+    const purchaseOrders = await this.purchaseOrderRepository.find({
+      where: { requisitionId },
+      relations: [
+        'supplier',
+        'creator',
+        'items',
+        'items.requisitionItem',
+        'items.requisitionItem.material',
+      ],
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+
+    return {
+      requisition: {
+        requisitionId: requisition.requisitionId,
+        requisitionNumber: requisition.requisitionNumber,
+        status: requisition.status,
+      },
+      purchaseOrders,
+    };
   }
 }

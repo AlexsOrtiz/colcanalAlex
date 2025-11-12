@@ -3,10 +3,12 @@ import {
   Column,
   PrimaryGeneratedColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
 } from 'typeorm';
 import { Company } from './company.entity';
 import { Project } from './project.entity';
+import { Requisition } from './requisition.entity';
 
 @Entity('project_codes')
 export class ProjectCode {
@@ -31,4 +33,7 @@ export class ProjectCode {
   })
   @JoinColumn({ name: 'project_id' })
   project: Project;
+
+  @OneToMany(() => Requisition, (requisition) => requisition.projectCode)
+  requisitions: Requisition[];
 }
