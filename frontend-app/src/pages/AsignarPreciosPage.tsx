@@ -5,6 +5,8 @@ import {
   getRequisitionWithPrices,
   assignPrices,
   createPurchaseOrders,
+  getLatestMaterialPrice,
+  type MaterialPriceHistory,
 } from '@/services/purchase-orders.service';
 import type {
   RequisitionWithQuotations,
@@ -20,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Save, FileCheck, AlertCircle, ArrowLeft } from 'lucide-react';
+import { Save, FileCheck, AlertCircle, ArrowLeft, History } from 'lucide-react';
 import { formatDate, formatCurrency } from '@/utils/dateUtils';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -35,6 +37,7 @@ interface ItemPriceState {
   subtotal: number;
   ivaAmount: number;
   total: number;
+  priceHistory: MaterialPriceHistory | null;
 }
 
 export default function AsignarPreciosPage() {
@@ -75,44 +78,68 @@ export default function AsignarPreciosPage() {
     }
   };
 
-  const initializeItemPrices = (req: RequisitionWithQuotations) => {
+  const initializeItemPrices = async (req: RequisitionWithQuotations) => {
     const pricesMap = new Map<number, ItemPriceState>();
 
-    req.items.forEach((item) => {
-      const quotationsForItem = item.quotations.filter(
-        (q) => q.action === 'cotizar' && q.isActive
-      );
-
-      if (quotationsForItem.length > 0) {
-        // Si ya hay un proveedor seleccionado, usar ese
-        const selectedQuotation =
-          quotationsForItem.find((q) => q.isSelected) || quotationsForItem[0];
-
-        const unitPrice = selectedQuotation.unitPrice?.toString() || '';
-        const hasIva = selectedQuotation.hasIva || false;
-        const ivaPercentage = 19; // Default IVA percentage
-        const discount = selectedQuotation.discount?.toString() || '0';
-
-        const calculatedValues = calculateTotals(
-          parseFloat(unitPrice) || 0,
-          item.quantity,
-          hasIva,
-          ivaPercentage,
-          parseFloat(discount) || 0
+    // Process all items and fetch price history in parallel
+    await Promise.all(
+      req.items.map(async (item) => {
+        const quotationsForItem = item.quotations.filter(
+          (q) => q.action === 'cotizar' && q.isActive
         );
 
-        pricesMap.set(item.itemId, {
-          itemId: item.itemId,
-          quotationId: selectedQuotation.quotationId,
-          selectedSupplier: selectedQuotation,
-          unitPrice,
-          hasIva,
-          ivaPercentage,
-          discount,
-          ...calculatedValues,
-        });
-      }
-    });
+        if (quotationsForItem.length > 0) {
+          // Si ya hay un proveedor seleccionado, usar ese
+          const selectedQuotation =
+            quotationsForItem.find((q) => q.isSelected) || quotationsForItem[0];
+
+          // Fetch price history for this material + supplier
+          let priceHistory: MaterialPriceHistory | null = null;
+          let unitPrice = selectedQuotation.unitPrice?.toString() || '';
+          let hasIva = selectedQuotation.hasIva || false;
+          let ivaPercentage = 19; // Default IVA percentage
+          let discount = selectedQuotation.discount?.toString() || '0';
+
+          if (item.material?.materialId && selectedQuotation.supplierId) {
+            priceHistory = await getLatestMaterialPrice(
+              item.material.materialId,
+              selectedQuotation.supplierId
+            );
+
+            // Pre-populate from history if available
+            if (priceHistory) {
+              unitPrice = priceHistory.unitPrice.toString();
+              hasIva = priceHistory.hasIva;
+              ivaPercentage = priceHistory.ivaPercentage;
+              discount = priceHistory.discount.toString();
+            } else if (selectedQuotation.unitPrice) {
+              // Fallback to quotation price if available
+              unitPrice = selectedQuotation.unitPrice.toString();
+            }
+          }
+
+          const calculatedValues = calculateTotals(
+            parseFloat(unitPrice) || 0,
+            item.quantity,
+            hasIva,
+            ivaPercentage,
+            parseFloat(discount) || 0
+          );
+
+          pricesMap.set(item.itemId, {
+            itemId: item.itemId,
+            quotationId: selectedQuotation.quotationId,
+            selectedSupplier: selectedQuotation,
+            unitPrice,
+            hasIva,
+            ivaPercentage,
+            discount,
+            priceHistory,
+            ...calculatedValues,
+          });
+        }
+      })
+    );
 
     setItemPrices(pricesMap);
   };
@@ -159,7 +186,7 @@ export default function AsignarPreciosPage() {
     });
   };
 
-  const handleSupplierChange = (itemId: number, quotationId: number) => {
+  const handleSupplierChange = async (itemId: number, quotationId: number) => {
     const item = requisition?.items.find((i) => i.itemId === itemId);
     if (!item) return;
 
@@ -167,6 +194,42 @@ export default function AsignarPreciosPage() {
       (q) => q.quotationId === quotationId
     );
     if (!selectedQuotation) return;
+
+    // Fetch price history for new supplier selection
+    let priceHistory: MaterialPriceHistory | null = null;
+    let unitPrice = '';
+    let hasIva = false;
+    let ivaPercentage = 19;
+    let discount = '0';
+
+    if (item.material?.materialId && selectedQuotation.supplierId) {
+      priceHistory = await getLatestMaterialPrice(
+        item.material.materialId,
+        selectedQuotation.supplierId
+      );
+
+      // Pre-populate from history if available
+      if (priceHistory) {
+        unitPrice = priceHistory.unitPrice.toString();
+        hasIva = priceHistory.hasIva;
+        ivaPercentage = priceHistory.ivaPercentage;
+        discount = priceHistory.discount.toString();
+      } else if (selectedQuotation.unitPrice) {
+        // Fallback to quotation price if available
+        unitPrice = selectedQuotation.unitPrice.toString();
+        hasIva = selectedQuotation.hasIva || false;
+        discount = selectedQuotation.discount?.toString() || '0';
+      }
+    }
+
+    // Calculate totals with new prices
+    const calculatedValues = calculateTotals(
+      parseFloat(unitPrice) || 0,
+      item.quantity,
+      hasIva,
+      ivaPercentage,
+      parseFloat(discount) || 0
+    );
 
     setItemPrices((prev) => {
       const newMap = new Map(prev);
@@ -177,6 +240,12 @@ export default function AsignarPreciosPage() {
         ...currentState,
         quotationId,
         selectedSupplier: selectedQuotation,
+        unitPrice,
+        hasIva,
+        ivaPercentage,
+        discount,
+        priceHistory,
+        ...calculatedValues,
       };
 
       newMap.set(itemId, updated);
@@ -245,7 +314,7 @@ export default function AsignarPreciosPage() {
         itemId: state.itemId,
         supplierId: state.selectedSupplier!.supplierId!,
         unitPrice: parseFloat(state.unitPrice),
-        hasIva: state.hasIva,
+        hasIVA: state.hasIva,
         discount: parseFloat(state.discount) || 0,
       }));
 
@@ -320,9 +389,11 @@ export default function AsignarPreciosPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-                <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                  Logo 1
-                </span>
+                <img
+                  src="/assets/images/logo-canalco.png"
+                  alt="Canales Contactos"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <Button
                 variant="ghost"
@@ -345,9 +416,11 @@ export default function AsignarPreciosPage() {
             </div>
 
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 2
-              </span>
+              <img
+                src="/assets/images/logo-alumbrado.png"
+                alt="Alumbrado Público"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>
@@ -483,6 +556,26 @@ export default function AsignarPreciosPage() {
                         <p className="text-sm text-[hsl(var(--canalco-neutral-700))]">
                           {activeQuotations[0].supplier?.name} - NIT: {activeQuotations[0].supplier?.nitCc}
                         </p>
+                      </div>
+                    )}
+
+                    {/* Price History Indicator */}
+                    {priceState?.priceHistory && (
+                      <div className="mb-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center gap-2 text-xs text-blue-700">
+                          <History className="w-4 h-4" />
+                          <span className="font-medium">
+                            Último precio usado: {formatCurrency(priceState.priceHistory.unitPrice)}
+                          </span>
+                          {priceState.priceHistory.purchaseOrderNumber && (
+                            <span className="text-blue-600">
+                              (OC: {priceState.priceHistory.purchaseOrderNumber})
+                            </span>
+                          )}
+                          <span className="text-blue-600">
+                            - {formatDate(priceState.priceHistory.lastUsedDate)}
+                          </span>
+                        </div>
                       </div>
                     )}
 

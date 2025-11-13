@@ -82,11 +82,13 @@ export default function DashboardPage() {
       <header className="bg-white border-b border-[hsl(var(--canalco-neutral-300))] shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between gap-4">
-            {/* Logo 1 - Left */}
+            {/* Logo 1 - Canales Contactos - Left */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 md:w-20 md:h-20 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs md:text-sm font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 1
-              </span>
+              <img
+                src="/assets/images/logo-canalco.png"
+                alt="Canales Contactos"
+                className="w-full h-full object-contain"
+              />
             </div>
 
             {/* Title */}
@@ -128,11 +130,13 @@ export default function DashboardPage() {
               </Button>
             </div>
 
-            {/* Logo 2 - Right */}
+            {/* Logo 2 - Alumbrado Público - Right */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 md:w-20 md:h-20 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs md:text-sm font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 2
-              </span>
+              <img
+                src="/assets/images/logo-alumbrado.png"
+                alt="Alumbrado Público"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>

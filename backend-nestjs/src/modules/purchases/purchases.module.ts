@@ -27,6 +27,7 @@ import { PurchaseOrder } from '../../database/entities/purchase-order.entity';
 import { PurchaseOrderItem } from '../../database/entities/purchase-order-item.entity';
 import { PurchaseOrderSequence } from '../../database/entities/purchase-order-sequence.entity';
 import { MaterialReceipt } from '../../database/entities/material-receipt.entity';
+import { MaterialPriceHistory } from '../../database/entities/material-price-history.entity';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { MaterialReceipt } from '../../database/entities/material-receipt.entity
       PurchaseOrderItem,
       PurchaseOrderSequence,
       MaterialReceipt,
+      MaterialPriceHistory,
     ]),
   ],
   controllers: [MasterDataController, PurchasesController],

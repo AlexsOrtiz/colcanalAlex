@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Eye, Edit, CheckCircle, XCircle, AlertCircle, Loader2, ArrowLeft, Check, X, History, MessageSquare, CheckCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,7 @@ import {
   type RequisitionItem,
 } from '@/services/requisition.service';
 import { requisitionsService, type ItemApprovalResponse } from '@/services/requisitions.service';
+import { RequisitionFilters, type FilterValues } from '@/components/ui/requisition-filters';
 
 // Estado de aprobación por ítem
 interface ItemReviewStatus {
@@ -56,6 +57,16 @@ const RevisarRequisicionesPage: React.FC = () => {
   // Usuario actual
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const userRole = user?.nombreRol || '';
+
+  // Filtros
+  const [filters, setFilters] = useState<FilterValues>({
+    requisitionNumber: '',
+    startDate: '',
+    endDate: '',
+    operationCenter: '',
+    status: '',
+    creatorName: '',
+  });
 
   // Cargar requisiciones pendientes
   const loadPendingRequisitions = async () => {
@@ -335,6 +346,85 @@ const RevisarRequisicionesPage: React.FC = () => {
     return { approved, rejected, pending };
   };
 
+  // Extraer opciones únicas de filtros
+  const availableStatuses = useMemo(() => {
+    const statuses = requisitions
+      .map((r) => r.status)
+      .filter((s): s is NonNullable<typeof s> => s != null);
+    const uniqueStatuses = Array.from(
+      new Map(statuses.map((s) => [s.code, s])).values()
+    );
+    return uniqueStatuses;
+  }, [requisitions]);
+
+  const availableOperationCenters = useMemo(() => {
+    const centers = requisitions
+      .map((r) => r.operationCenter)
+      .filter((c): c is NonNullable<typeof c> => c != null);
+    const uniqueCenters = Array.from(
+      new Map(centers.map((c) => [c.code, { code: c.code, name: c.code }])).values()
+    );
+    return uniqueCenters;
+  }, [requisitions]);
+
+  // Filtrar requisiciones
+  const filteredRequisitions = useMemo(() => {
+    return requisitions.filter((req) => {
+      // Filtro por número de requisición
+      if (
+        filters.requisitionNumber &&
+        !req.requisitionNumber
+          .toLowerCase()
+          .includes(filters.requisitionNumber.toLowerCase())
+      ) {
+        return false;
+      }
+
+      // Filtro por fecha desde
+      if (filters.startDate) {
+        const reqDate = new Date(req.createdAt);
+        const startDate = new Date(filters.startDate);
+        if (reqDate < startDate) return false;
+      }
+
+      // Filtro por fecha hasta
+      if (filters.endDate) {
+        const reqDate = new Date(req.createdAt);
+        const endDate = new Date(filters.endDate);
+        endDate.setHours(23, 59, 59, 999); // Incluir todo el día
+        if (reqDate > endDate) return false;
+      }
+
+      // Filtro por centro de operación
+      if (
+        filters.operationCenter &&
+        filters.operationCenter !== 'all' &&
+        req.operationCenter.code !== filters.operationCenter
+      ) {
+        return false;
+      }
+
+      // Filtro por estado
+      if (
+        filters.status &&
+        filters.status !== 'all' &&
+        req.status?.code !== filters.status
+      ) {
+        return false;
+      }
+
+      // Filtro por solicitante (creador)
+      if (
+        filters.creatorName &&
+        !req.creator.nombre.toLowerCase().includes(filters.creatorName.toLowerCase())
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [requisitions, filters]);
+
   if (loading && requisitions.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -352,9 +442,11 @@ const RevisarRequisicionesPage: React.FC = () => {
             {/* Left: Logo 1 + Back Button */}
             <div className="flex items-center gap-3">
               <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-                <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                  Logo 1
-                </span>
+                <img
+                  src="/assets/images/logo-canalco.png"
+                  alt="Canales Contactos"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <Button
                 variant="ghost"
@@ -382,11 +474,13 @@ const RevisarRequisicionesPage: React.FC = () => {
               </p>
             </div>
 
-            {/* Right: Logo 2 */}
+            {/* Right: Logo 2 - Alumbrado Público */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 2
-              </span>
+              <img
+                src="/assets/images/logo-alumbrado.png"
+                alt="Alumbrado Público"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>
@@ -420,25 +514,41 @@ const RevisarRequisicionesPage: React.FC = () => {
         {/* Vista de Lista */}
         {!showDetail && (
           <>
-            {requisitions.length === 0 ? (
+            {/* Filtros */}
+            {requisitions.length > 0 && (
+              <div className="mb-6 bg-white rounded-lg border border-[hsl(var(--canalco-neutral-200))] overflow-hidden">
+                <RequisitionFilters
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                  availableStatuses={availableStatuses}
+                  availableOperationCenters={availableOperationCenters}
+                />
+              </div>
+            )}
+
+            {filteredRequisitions.length === 0 ? (
               <div className="text-center py-12 bg-white rounded-lg border border-[hsl(var(--canalco-neutral-200))]">
                 <CheckCircle className="h-16 w-16 mx-auto text-[hsl(var(--canalco-neutral-400))] mb-4" />
                 <p className="text-lg font-medium text-[hsl(var(--canalco-neutral-700))]">
-                  No hay requisiciones pendientes
+                  {requisitions.length === 0
+                    ? 'No hay requisiciones pendientes'
+                    : 'No se encontraron requisiciones con los filtros aplicados'}
                 </p>
                 <p className="text-sm text-[hsl(var(--canalco-neutral-500))] mt-2">
-                  Todas las requisiciones asignadas han sido procesadas.
+                  {requisitions.length === 0
+                    ? 'Todas las requisiciones asignadas han sido procesadas.'
+                    : 'Intenta ajustar los filtros para ver más resultados.'}
                 </p>
               </div>
             ) : (
               <div className="bg-white rounded-lg border border-[hsl(var(--canalco-neutral-200))] overflow-hidden">
                 {/* Pending Requisitions Section */}
-                {requisitions.filter(r => r.isPending).length > 0 && (
+                {filteredRequisitions.filter(r => r.isPending).length > 0 && (
                   <div>
                     <div className="bg-orange-50 border-b border-orange-200 px-4 py-2">
                       <p className="text-sm font-semibold text-orange-800 flex items-center gap-2">
                         <AlertCircle className="h-4 w-4" />
-                        PENDIENTES ({requisitions.filter(r => r.isPending).length})
+                        PENDIENTES ({filteredRequisitions.filter(r => r.isPending).length})
                       </p>
                     </div>
                     <Table>
@@ -456,7 +566,7 @@ const RevisarRequisicionesPage: React.FC = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {requisitions.filter(r => r.isPending).map((req) => (
+                        {filteredRequisitions.filter(r => r.isPending).map((req) => (
                           <TableRow key={req.requisitionId} className="bg-white hover:bg-orange-50/30">
                             <TableCell className="font-mono font-semibold text-[hsl(var(--canalco-primary))]">
                               {req.requisitionNumber}
@@ -549,12 +659,12 @@ const RevisarRequisicionesPage: React.FC = () => {
                 )}
 
                 {/* Processed Requisitions Section */}
-                {requisitions.filter(r => !r.isPending).length > 0 && (
-                  <div className={requisitions.filter(r => r.isPending).length > 0 ? 'border-t-4 border-[hsl(var(--canalco-neutral-200))]' : ''}>
+                {filteredRequisitions.filter(r => !r.isPending).length > 0 && (
+                  <div className={filteredRequisitions.filter(r => r.isPending).length > 0 ? 'border-t-4 border-[hsl(var(--canalco-neutral-200))]' : ''}>
                     <div className="bg-green-50 border-b border-green-200 px-4 py-2">
                       <p className="text-sm font-semibold text-green-800 flex items-center gap-2">
                         <CheckCircle className="h-4 w-4" />
-                        YA REVISADAS ({requisitions.filter(r => !r.isPending).length})
+                        YA REVISADAS ({filteredRequisitions.filter(r => !r.isPending).length})
                       </p>
                     </div>
                     <Table>
@@ -572,7 +682,7 @@ const RevisarRequisicionesPage: React.FC = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {requisitions.filter(r => !r.isPending).map((req) => (
+                        {filteredRequisitions.filter(r => !r.isPending).map((req) => (
                           <TableRow key={req.requisitionId} className="bg-white hover:bg-green-50/30">
                             <TableCell className="font-mono font-semibold text-[hsl(var(--canalco-neutral-600))]">
                               {req.requisitionNumber}

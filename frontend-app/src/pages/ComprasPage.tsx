@@ -170,9 +170,11 @@ export default function ComprasPage() {
           <div className="flex items-center justify-between gap-4">
             {/* Logo 1 - Left */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 md:w-20 md:h-20 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs md:text-sm font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 1
-              </span>
+              <img
+                  src="/assets/images/logo-canalco.png"
+                  alt="Canales Contactos"
+                  className="w-full h-full object-contain"
+                />
             </div>
 
             {/* Back Button & Title */}
@@ -197,9 +199,11 @@ export default function ComprasPage() {
 
             {/* Logo 2 - Right */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 md:w-20 md:h-20 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs md:text-sm font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 2
-              </span>
+              <img
+                src="/assets/images/logo-alumbrado.png"
+                alt="Alumbrado Público"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>

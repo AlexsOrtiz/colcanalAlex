@@ -109,9 +109,11 @@ export default function DetalleRequisicionPage() {
                 <Home className="w-5 h-5" />
               </Button>
               <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-                <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                  Logo 1
-                </span>
+                <img
+                  src="/assets/images/logo-canalco.png"
+                  alt="Canales Contactos"
+                  className="w-full h-full object-contain"
+                />
               </div>
             </div>
 
@@ -127,9 +129,11 @@ export default function DetalleRequisicionPage() {
 
             {/* Right: Logo 2 */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 2
-              </span>
+              <img
+                src="/assets/images/logo-alumbrado.png"
+                alt="Alumbrado Público"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>

@@ -72,6 +72,18 @@ export interface PaginatedResponse<T> {
   totalPages: number;
 }
 
+export interface MaterialPriceHistory {
+  materialId: number;
+  supplierId: number;
+  unitPrice: number;
+  hasIva: boolean;
+  ivaPercentage: number;
+  discount: number;
+  lastUsedDate: string;
+  purchaseOrderNumber?: string;
+  supplierName?: string;
+}
+
 // ============================================
 // API METHODS
 // ============================================
@@ -147,4 +159,26 @@ export const getPurchaseOrdersByRequisition = async (
     `/purchases/requisitions/${requisitionId}/purchase-orders`
   );
   return response.data;
+};
+
+/**
+ * Get latest price history for a material with a specific supplier
+ */
+export const getLatestMaterialPrice = async (
+  materialId: number,
+  supplierId: number
+): Promise<MaterialPriceHistory | null> => {
+  try {
+    const response = await api.get<MaterialPriceHistory>(
+      `/purchases/requisitions/materials/${materialId}/latest-price/${supplierId}`
+    );
+    return response.data;
+  } catch (error: any) {
+    // Return null if no price history found (404) or other errors
+    if (error.response?.status === 404) {
+      return null;
+    }
+    console.error('Error fetching material price history:', error);
+    return null;
+  }
 };

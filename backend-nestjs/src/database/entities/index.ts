@@ -32,3 +32,4 @@ export { PurchaseOrder } from './purchase-order.entity';
 export { PurchaseOrderItem } from './purchase-order-item.entity';
 export { PurchaseOrderSequence } from './purchase-order-sequence.entity';
 export { MaterialReceipt } from './material-receipt.entity';
+export { MaterialPriceHistory } from './material-price-history.entity';

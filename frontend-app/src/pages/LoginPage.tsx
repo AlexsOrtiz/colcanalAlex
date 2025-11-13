@@ -1,11 +1,11 @@
 import { LoginForm } from '@/components/auth/LoginForm';
 import { CarouselInstitutional } from '@/components/ui/carousel-institutional';
 
-// Placeholder institutional images (replace with actual images later)
+// Institutional images for carousel
 const INSTITUTIONAL_IMAGES = [
-  'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?w=800&auto=format&fit=crop',
-  'https://images.unsplash.com/photo-1504917595217-d4dc5ebe6122?w=800&auto=format&fit=crop',
-  'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800&auto=format&fit=crop',
+  '/assets/images/carousel-1.jpg',
+  '/assets/images/carousel-2.jpg',
+  '/assets/images/carousel-3.jpg',
 ];
 
 export default function LoginPage() {
@@ -13,18 +13,22 @@ export default function LoginPage() {
     <div className="min-h-screen bg-background relative">
       {/* Top Logos */}
       <div className="absolute top-0 left-0 right-0 z-20 flex justify-between items-start p-6 md:p-8">
-        {/* Logo 1 - Top Left */}
+        {/* Logo 1 - Canales Contactos - Top Left */}
         <div className="bg-white rounded-xl shadow-md p-4 w-24 h-24 md:w-28 md:h-28 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))]">
-          <span className="text-sm md:text-base font-bold text-[hsl(var(--canalco-neutral-600))]">
-            Logo 1
-          </span>
+          <img
+            src="/assets/images/logo-canalco.png"
+            alt="Canales Contactos"
+            className="w-full h-full object-contain"
+          />
         </div>
 
-        {/* Logo 2 - Top Right */}
+        {/* Logo 2 - Alumbrado Público - Top Right */}
         <div className="bg-white rounded-xl shadow-md p-4 w-24 h-24 md:w-28 md:h-28 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))]">
-          <span className="text-sm md:text-base font-bold text-[hsl(var(--canalco-neutral-600))]">
-            Logo 2
-          </span>
+          <img
+            src="/assets/images/logo-alumbrado.png"
+            alt="Alumbrado Público"
+            className="w-full h-full object-contain"
+          />
         </div>
       </div>
 

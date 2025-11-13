@@ -1302,4 +1302,56 @@ export class PurchasesController {
   ) {
     return this.purchasesService.getPurchaseOrdersByRequisition(id, user.userId);
   }
+
+  // ============================================
+  // MATERIAL PRICE HISTORY
+  // ============================================
+
+  @Get('materials/:materialId/latest-price/:supplierId')
+  @ApiOperation({
+    summary: 'Obtener último precio de material por proveedor',
+    description: `
+    Obtiene el precio más reciente de un material específico con un proveedor específico,
+    basado en órdenes de compra previas.
+
+    ## Uso típico
+
+    Pre-poblar precios en la pantalla de asignación de precios para órdenes de compra,
+    mostrando el último precio usado para facilitar la captura de datos.
+
+    ## Retorna
+
+    - **unitPrice**: Precio unitario sin IVA
+    - **hasIva**: Si aplica IVA
+    - **ivaPercentage**: Porcentaje de IVA
+    - **discount**: Descuento aplicado
+    - **lastUsedDate**: Fecha de la última orden de compra
+    - **purchaseOrderNumber**: Número de la última orden de compra
+    - **supplierName**: Nombre del proveedor
+
+    ## Ejemplo
+
+    GET /purchases/requisitions/materials/15/latest-price/3
+    `,
+  })
+  @ApiParam({
+    name: 'materialId',
+    description: 'ID del material',
+    type: Number,
+  })
+  @ApiParam({
+    name: 'supplierId',
+    description: 'ID del proveedor',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Precio obtenido exitosamente (puede ser null si no hay historial)',
+  })
+  async getLatestMaterialPrice(
+    @Param('materialId', ParseIntPipe) materialId: number,
+    @Param('supplierId', ParseIntPipe) supplierId: number,
+  ) {
+    return this.purchasesService.getLatestMaterialPrice(materialId, supplierId);
+  }
 }

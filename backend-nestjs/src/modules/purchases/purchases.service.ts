@@ -29,6 +29,7 @@ import { PurchaseOrder } from '../../database/entities/purchase-order.entity';
 import { PurchaseOrderItem } from '../../database/entities/purchase-order-item.entity';
 import { PurchaseOrderSequence } from '../../database/entities/purchase-order-sequence.entity';
 import { MaterialReceipt } from '../../database/entities/material-receipt.entity';
+import { MaterialPriceHistory } from '../../database/entities/material-price-history.entity';
 import { calculateSLA, getSLAForStatus } from '../../utils/business-days.util';
 import { CreatePurchaseOrdersDto } from './dto/create-purchase-orders.dto';
 import { CreateMaterialReceiptDto } from './dto/create-material-receipt.dto';
@@ -73,6 +74,8 @@ export class PurchasesService {
     private materialReceiptRepository: Repository<MaterialReceipt>,
     @InjectRepository(RequisitionItemApproval)
     private itemApprovalRepository: Repository<RequisitionItemApproval>,
+    @InjectRepository(MaterialPriceHistory)
+    private materialPriceHistoryRepository: Repository<MaterialPriceHistory>,
     private dataSource: DataSource,
   ) {}
 
@@ -1853,7 +1856,7 @@ export class PurchasesService {
             requisitionItemId: In(itemIds),
             isActive: true,
           },
-          relations: ['requisitionItem', 'supplier'],
+          relations: ['requisitionItem', 'requisitionItem.material', 'supplier'],
         },
       );
 
@@ -1989,12 +1992,29 @@ export class PurchasesService {
         await queryRunner.manager.save(purchaseOrder);
 
         // 4.4 Crear los ítems de la orden
-        for (const itemData of orderItems) {
+        for (let i = 0; i < orderItems.length; i++) {
+          const itemData = orderItems[i];
+          const { item, quotation } = items[i]; // Obtener la información original
+
           const poItem = queryRunner.manager.create(PurchaseOrderItem, {
             purchaseOrderId: purchaseOrder.purchaseOrderId,
             ...itemData,
           });
           await queryRunner.manager.save(poItem);
+
+          // 4.4.1 Registrar precio en historial
+          const priceHistory = queryRunner.manager.create(MaterialPriceHistory, {
+            materialId: quotation.requisitionItem.material.materialId,
+            supplierId,
+            unitPrice: itemData.unitPrice,
+            hasIva: itemData.hasIva,
+            ivaPercentage: itemData.ivaPercentage,
+            discount: itemData.discount,
+            purchaseOrderItemId: poItem.poItemId,
+            purchaseOrderId: purchaseOrder.purchaseOrderId,
+            createdBy: userId,
+          });
+          await queryRunner.manager.save(priceHistory);
         }
 
         createdPurchaseOrders.push(purchaseOrder);
@@ -2046,6 +2066,43 @@ export class PurchasesService {
     } finally {
       await queryRunner.release();
     }
+  }
+
+  // ============================================
+  // MATERIAL PRICE HISTORY - HISTORIAL DE PRECIOS
+  // ============================================
+
+  /**
+   * Obtener el último precio registrado para un material + proveedor
+   * Retorna el precio más reciente basado en órdenes de compra previas
+   */
+  async getLatestMaterialPrice(materialId: number, supplierId: number) {
+    const latestPrice = await this.materialPriceHistoryRepository.findOne({
+      where: {
+        materialId,
+        supplierId,
+      },
+      order: {
+        createdAt: 'DESC',
+      },
+      relations: ['supplier', 'purchaseOrder'],
+    });
+
+    if (!latestPrice) {
+      return null;
+    }
+
+    return {
+      materialId: latestPrice.materialId,
+      supplierId: latestPrice.supplierId,
+      unitPrice: latestPrice.unitPrice,
+      hasIva: latestPrice.hasIva,
+      ivaPercentage: latestPrice.ivaPercentage,
+      discount: latestPrice.discount,
+      lastUsedDate: latestPrice.createdAt,
+      purchaseOrderNumber: latestPrice.purchaseOrder?.purchaseOrderNumber,
+      supplierName: latestPrice.supplier?.name,
+    };
   }
 
   // ============================================

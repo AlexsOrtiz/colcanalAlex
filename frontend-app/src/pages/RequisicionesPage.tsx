@@ -125,11 +125,13 @@ export default function RequisicionesPage() {
           <div className="flex items-center justify-between gap-4">
             {/* Left: Logo + Navigation */}
             <div className="flex items-center gap-3">
-              {/* Logo 1 */}
+              {/* Logo 1 - Canales Contactos */}
               <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-                <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                  Logo 1
-                </span>
+                <img
+                  src="/assets/images/logo-canalco.png"
+                  alt="Canales Contactos"
+                  className="w-full h-full object-contain"
+                />
               </div>
 
               {/* Home Button */}
@@ -175,11 +177,13 @@ export default function RequisicionesPage() {
               </p>
             </div>
 
-            {/* Right: Logo 2 */}
+            {/* Right: Logo 2 - Alumbrado Público */}
             <div className="bg-white rounded-xl shadow-md p-3 w-16 h-16 flex items-center justify-center border-2 border-[hsl(var(--canalco-primary))] flex-shrink-0">
-              <span className="text-xs font-bold text-[hsl(var(--canalco-neutral-600))]">
-                Logo 2
-              </span>
+              <img
+                src="/assets/images/logo-alumbrado.png"
+                alt="Alumbrado Público"
+                className="w-full h-full object-contain"
+              />
             </div>
           </div>
         </div>
