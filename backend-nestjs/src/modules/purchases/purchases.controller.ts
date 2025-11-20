@@ -35,6 +35,7 @@ import { ManageQuotationDto } from './dto/manage-quotation.dto';
 import { CreatePurchaseOrdersDto } from './dto/create-purchase-orders.dto';
 import { CreateMaterialReceiptDto } from './dto/create-material-receipt.dto';
 import { UpdateMaterialReceiptDto } from './dto/update-material-receipt.dto';
+import { ApprovePurchaseOrderDto } from './dto/approve-purchase-order.dto';
 import { User } from '../../database/entities/user.entity';
 
 @ApiTags('Purchases - Requisitions')
@@ -644,10 +645,12 @@ export class PurchasesController {
 
     ## Estados válidos
 
-    Solo se puede consultar si la requisición está en estado:
+    Se puede consultar si la requisición está en estado:
     - \`aprobada_gerencia\` (lista para cotizar)
     - \`en_cotizacion\` (en proceso de asignación)
     - \`cotizada\` (cotización completa, permite editar antes de crear orden)
+    - \`en_orden_compra\` (tiene órdenes de compra creadas - solo visualización)
+    - \`pendiente_recepcion\` (en proceso de recepción - solo visualización)
     `,
   })
   @ApiParam({
@@ -1214,6 +1217,379 @@ export class PurchasesController {
       filters,
     );
   }
+  // ============================================
+  // APROBACIÓN DE ÓRDENES DE COMPRA
+  // ============================================
+
+  @Get('purchase-orders/pending-approval')
+  @ApiOperation({
+    summary: 'Listar órdenes de compra para aprobación (Gerencia)',
+    description: `
+    Obtiene un listado paginado de todas las órdenes de compra pendientes, aprobadas y rechazadas por Gerencia.
+
+    ## Restricción de acceso
+
+    Solo usuarios con rol **Gerencia** pueden acceder a este endpoint.
+
+    ## Estados incluidos
+
+    - **pendiente_aprobacion_gerencia**: Órdenes pendientes de aprobar
+    - **aprobada_gerencia**: Órdenes ya aprobadas
+    - **rechazada_gerencia**: Órdenes rechazadas
+
+    ## Información incluida
+
+    - **Orden de compra**: Número, fecha de emisión, totales
+    - **Requisición**: Número, empresa, proyecto
+    - **Proveedor**: Nombre, NIT
+    - **Ítems**: Lista de materiales con cantidades y precios
+    - **Deadline**: Fecha límite de aprobación (1 día hábil)
+    - **Estado de vencimiento**: Si está vencida o no
+    - **Historial de aprobaciones**: Incluye rechazos previos
+
+    ## Deadline
+
+    Cada orden de compra tiene un plazo de **1 día hábil** desde su creación para ser aprobada.
+    Las órdenes vencidas se marcan con \`isOverdue: true\` y se calcula \`daysOverdue\`.
+
+    ## Ejemplo
+
+    GET /purchases/requisitions/purchase-orders/pending-approval?page=1&limit=10
+    `,
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    description: 'Número de página (default: 1)',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Registros por página (default: 10)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de órdenes pendientes obtenida exitosamente',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el rol Gerencia puede acceder a este endpoint',
+  })
+  async getPendingPurchaseOrdersForApproval(
+    @GetUser() user: User,
+    @Query('page', new ParseIntPipe({ optional: true })) page: number = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit: number = 10,
+  ) {
+    return this.purchasesService.getPendingPurchaseOrdersForApproval(
+      user.userId,
+      page,
+      limit,
+    );
+  }
+
+  @Get('purchase-orders/:id/for-approval')
+  @ApiOperation({
+    summary: 'Ver detalle de una orden de compra para aprobar (Gerencia)',
+    description: `
+    Obtiene el detalle completo de una orden de compra para su aprobación o rechazo.
+
+    ## Restricción de acceso
+
+    Solo usuarios con rol **Gerencia** pueden acceder a este endpoint.
+
+    ## Información incluida
+
+    - **Orden de compra completa**: Número, fecha, totales
+    - **Requisición**: Información del proyecto y empresa
+    - **Proveedor**: Datos completos
+    - **Ítems detallados**:
+      - Material (código, nombre, grupo, unidad de medida)
+      - Cantidad solicitada
+      - Precio unitario, IVA, descuento
+      - Subtotal y total por ítem
+      - Cotización original asociada
+    - **Historial de aprobaciones**: Aprobaciones y rechazos previos
+    - **Deadline**: Fecha límite y estado de vencimiento
+
+    ## Uso típico
+
+    Esta información se muestra en la pantalla de aprobación donde Gerencia puede:
+    - Ver toda la información de la línea completa
+    - Aprobar o rechazar cada ítem individualmente
+    - Proporcionar comentarios y justificaciones
+
+    ## Ejemplo
+
+    GET /purchases/requisitions/purchase-orders/1/for-approval
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la orden de compra',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Detalle de la orden de compra obtenido exitosamente',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el rol Gerencia puede acceder a este endpoint',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Orden de compra no encontrada',
+  })
+  async getPurchaseOrderForApproval(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.purchasesService.getPurchaseOrderForApproval(id, user.userId);
+  }
+
+  @Post('purchase-orders/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Aprobar o rechazar ítems de una orden de compra (Gerencia)',
+    description: `
+    Procesa la aprobación o rechazo de una orden de compra con decisiones item por item.
+
+    ## Restricción de acceso
+
+    Solo usuarios con rol **Gerencia** pueden aprobar órdenes de compra.
+
+    ## Lógica de aprobación
+
+    - **Si TODOS los ítems son aprobados**: La orden de compra pasa a estado \`aprobada_gerencia\`
+    - **Si ALGÚN ítem es rechazado**: La orden de compra pasa a estado \`rechazada_gerencia\`
+    - **Cuando se rechaza**: Se debe proporcionar un \`rejectionReason\` obligatorio
+    - **Contador de rechazos**: Se incrementa automáticamente en caso de rechazo
+
+    ## Request Body
+
+    \`\`\`json
+    {
+      "items": [
+        {
+          "poItemId": 1,
+          "decision": "approved",
+          "comments": "Precio correcto y dentro del presupuesto"
+        },
+        {
+          "poItemId": 2,
+          "decision": "rejected",
+          "comments": "Precio muy alto, renegociar con proveedor"
+        }
+      ],
+      "generalComments": "Revisar ítem 2 antes de reenviar",
+      "rejectionReason": "El ítem 2 excede el presupuesto aprobado para materiales eléctricos"
+    }
+    \`\`\`
+
+    ## Validaciones
+
+    - Todos los ítems de la OC deben tener una decisión
+    - Si hay rechazos, \`rejectionReason\` es obligatorio
+    - La OC debe estar en estado \`pendiente_aprobacion_gerencia\`
+
+    ## Resultado
+
+    - Se crea un registro en \`purchase_order_approvals\`
+    - Se crean registros individuales en \`purchase_order_item_approvals\`
+    - Se actualiza el estado de la orden de compra
+    - Si es rechazada, vuelve a Compras para corrección
+    - Si es aprobada, puede pasar a recepción de materiales
+
+    ## Ejemplo
+
+    POST /purchases/requisitions/purchase-orders/1/approve
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la orden de compra',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Orden de compra procesada exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Datos inválidos o falta justificación de rechazo',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el rol Gerencia puede aprobar órdenes',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Orden de compra no encontrada',
+  })
+  async approvePurchaseOrder(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() approvePurchaseOrderDto: ApprovePurchaseOrderDto,
+  ) {
+    return this.purchasesService.approvePurchaseOrder(
+      id,
+      user.userId,
+      approvePurchaseOrderDto,
+    );
+  }
+
+  @Post('purchase-orders/:id/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Rechazar una orden de compra completa (Gerencia)',
+    description: `
+    Rechaza una orden de compra completa sin necesidad de revisar ítem por ítem.
+
+    ## Restricción de acceso
+
+    Solo usuarios con rol **Gerencia** pueden rechazar órdenes de compra.
+
+    ## Cuándo usar este endpoint
+
+    - Cuando toda la orden tiene problemas generales (ej: proveedor equivocado, fecha incorrecta)
+    - Cuando no es necesario revisar cada ítem individualmente
+    - Como alternativa más rápida a aprobar/rechazar item por item
+
+    ## Request Body
+
+    \`\`\`json
+    {
+      "rejectionReason": "Proveedor no está autorizado para este tipo de materiales. Favor cambiar proveedor y reenviar."
+    }
+    \`\`\`
+
+    ## Validaciones
+
+    - \`rejectionReason\` es obligatorio
+    - La OC debe estar en estado \`pendiente_aprobacion_gerencia\`
+
+    ## Resultado
+
+    - Se crea un registro en \`purchase_order_approvals\` con estado rechazado
+    - Todos los ítems se marcan como rechazados automáticamente
+    - Se incrementa el contador de rechazos
+    - La orden vuelve a Compras para corrección
+
+    ## Ejemplo
+
+    POST /purchases/requisitions/purchase-orders/1/reject
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la orden de compra',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Orden de compra rechazada exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Falta la razón de rechazo',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el rol Gerencia puede rechazar órdenes',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Orden de compra no encontrada',
+  })
+  async rejectPurchaseOrder(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body('rejectionReason') rejectionReason: string,
+  ) {
+    return this.purchasesService.rejectPurchaseOrder(
+      id,
+      user.userId,
+      rejectionReason,
+    );
+  }
+
+  @Patch('purchase-orders/:id/resubmit')
+  @ApiOperation({
+    summary: 'Reenviar una orden de compra rechazada (Compras)',
+    description: `
+    Reenvía una orden de compra que fue rechazada por Gerencia, después de realizar las correcciones necesarias.
+
+    ## Restricción de acceso
+
+    Solo usuarios con rol **Compras** pueden reenviar órdenes de compra.
+
+    ## Flujo típico
+
+    1. Gerencia rechaza una OC con justificación
+    2. Compras recibe la notificación de rechazo
+    3. Compras corrige los problemas (puede editar precios, cambiar proveedor, etc.)
+    4. Compras usa este endpoint para reenviar la OC corregida a Gerencia
+    5. La OC vuelve a estado \`pendiente_aprobacion_gerencia\`
+    6. Gerencia puede revisarla nuevamente
+
+    ## Request Body (opcional)
+
+    \`\`\`json
+    {
+      "comments": "Se corrigió el precio del ítem 2 y se renegoci\u00f3 con el proveedor"
+    }
+    \`\`\`
+
+    ## Validaciones
+
+    - La OC debe estar en estado \`rechazada_gerencia\`
+    - Solo Compras puede reenviar
+
+    ## Resultado
+
+    - El estado cambia de \`rechazada_gerencia\` a \`pendiente_aprobacion_gerencia\`
+    - La OC vuelve a aparecer en la lista de pendientes de Gerencia
+    - Se mantiene el historial de rechazos y aprobaciones previas
+
+    ## Ejemplo
+
+    PATCH /purchases/requisitions/purchase-orders/1/resubmit
+    `,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'ID de la orden de compra',
+    type: Number,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Orden de compra reenviada exitosamente',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'La orden no está en estado rechazado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Solo el rol Compras puede reenviar órdenes',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Orden de compra no encontrada',
+  })
+  async resubmitPurchaseOrder(
+    @GetUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body('comments') comments?: string,
+  ) {
+    return this.purchasesService.resubmitPurchaseOrder(
+      id,
+      user.userId,
+      comments,
+    );
+  }
 
   @Get('purchase-orders/:id')
   @ApiOperation({
@@ -1302,6 +1678,7 @@ export class PurchasesController {
   ) {
     return this.purchasesService.getPurchaseOrdersByRequisition(id, user.userId);
   }
+
 
   // ============================================
   // MATERIAL PRICE HISTORY

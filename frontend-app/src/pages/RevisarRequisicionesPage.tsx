@@ -558,7 +558,7 @@ const RevisarRequisicionesPage: React.FC = () => {
                           <TableHead className="font-semibold">Empresa</TableHead>
                           <TableHead className="font-semibold">Proyecto/Obra</TableHead>
                           <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
-                          <TableHead className="font-semibold">Creado por</TableHead>
+                          <TableHead className="font-semibold">Solicitado por</TableHead>
                           <TableHead className="font-semibold">Última Actualización</TableHead>
                           <TableHead className="font-semibold">Estado</TableHead>
                           <TableHead className="font-semibold">Plazo</TableHead>
@@ -674,7 +674,7 @@ const RevisarRequisicionesPage: React.FC = () => {
                           <TableHead className="font-semibold">Empresa</TableHead>
                           <TableHead className="font-semibold">Proyecto/Obra</TableHead>
                           <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
-                          <TableHead className="font-semibold">Creado por</TableHead>
+                          <TableHead className="font-semibold">Solicitado por</TableHead>
                           <TableHead className="font-semibold">Última Actualización</TableHead>
                           <TableHead className="font-semibold">Estado</TableHead>
                           <TableHead className="font-semibold">Plazo</TableHead>
@@ -859,7 +859,7 @@ const RevisarRequisicionesPage: React.FC = () => {
                     </div>
                     <div>
                       <Label className="text-xs text-[hsl(var(--canalco-neutral-500))]">
-                        Creado por
+                        Solicitado por
                       </Label>
                       <p className="font-medium">
                         {selectedRequisition.creator.nombre}

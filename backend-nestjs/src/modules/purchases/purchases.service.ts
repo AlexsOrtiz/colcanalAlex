@@ -28,12 +28,16 @@ import { ManageQuotationDto } from './dto/manage-quotation.dto';
 import { PurchaseOrder } from '../../database/entities/purchase-order.entity';
 import { PurchaseOrderItem } from '../../database/entities/purchase-order-item.entity';
 import { PurchaseOrderSequence } from '../../database/entities/purchase-order-sequence.entity';
+import { PurchaseOrderStatus } from '../../database/entities/purchase-order-status.entity';
 import { MaterialReceipt } from '../../database/entities/material-receipt.entity';
 import { MaterialPriceHistory } from '../../database/entities/material-price-history.entity';
-import { calculateSLA, getSLAForStatus } from '../../utils/business-days.util';
+import { PurchaseOrderApproval, ApprovalStatus } from '../../database/entities/purchase-order-approval.entity';
+import { PurchaseOrderItemApproval, ItemApprovalStatus } from '../../database/entities/purchase-order-item-approval.entity';
+import { calculateSLA, getSLAForStatus, addBusinessDays, calculateBusinessDaysBetween } from '../../utils/business-days.util';
 import { CreatePurchaseOrdersDto } from './dto/create-purchase-orders.dto';
 import { CreateMaterialReceiptDto } from './dto/create-material-receipt.dto';
 import { UpdateMaterialReceiptDto } from './dto/update-material-receipt.dto';
+import { ApprovePurchaseOrderDto } from './dto/approve-purchase-order.dto';
 
 @Injectable()
 export class PurchasesService {
@@ -76,6 +80,12 @@ export class PurchasesService {
     private itemApprovalRepository: Repository<RequisitionItemApproval>,
     @InjectRepository(MaterialPriceHistory)
     private materialPriceHistoryRepository: Repository<MaterialPriceHistory>,
+    @InjectRepository(PurchaseOrderApproval)
+    private purchaseOrderApprovalRepository: Repository<PurchaseOrderApproval>,
+    @InjectRepository(PurchaseOrderItemApproval)
+    private purchaseOrderItemApprovalRepository: Repository<PurchaseOrderItemApproval>,
+    @InjectRepository(PurchaseOrderStatus)
+    private purchaseOrderStatusRepository: Repository<PurchaseOrderStatus>,
     private dataSource: DataSource,
   ) {}
 
@@ -89,6 +99,27 @@ export class PurchasesService {
     if (!status) {
       throw new Error(`Estado de requisición '${code}' no encontrado`);
     }
+    return status.statusId;
+  }
+
+  // ============================================
+  // HELPER: Obtener purchase order status ID por código (con cache)
+  // ============================================
+  private async getPurchaseOrderStatusId(code: string): Promise<number> {
+    const status = await this.purchaseOrderStatusRepository.findOne({
+      where: { code },
+      cache: {
+        id: `po_status_${code}`,
+        milliseconds: 86400000, // 24 horas
+      },
+    });
+
+    if (!status) {
+      throw new BadRequestException(
+        `Estado de orden de compra '${code}' no encontrado`
+      );
+    }
+
     return status.statusId;
   }
 
@@ -1326,16 +1357,30 @@ export class PurchasesService {
       // Join with approvals to calculate SLA deadlines
       .leftJoinAndSelect('requisition.approvals', 'approvals')
       .leftJoinAndSelect('approvals.user', 'approvalUser')
-      .leftJoinAndSelect('approvals.newStatus', 'approvalNewStatus')
+      .leftJoinAndSelect('approvals.newStatus', 'approvalNewStatus');
+
+    // Query 1: Obtener TODAS las requisiciones pendientes de cotización (sin límite)
+    const pendingQueryBuilder = queryBuilder.clone()
       .where('requisitionStatus.code IN (:...statuses)', {
-        statuses: ['aprobada_gerencia', 'en_cotizacion', 'cotizada']
+        statuses: ['aprobada_gerencia', 'en_cotizacion']
       })
-      .orderBy('requisition.createdAt', 'ASC');
+      .orderBy('requisition.createdAt', 'DESC');
 
-    const skip = (page - 1) * limit;
-    queryBuilder.skip(skip).take(limit);
+    const [pendingRequisitions, pendingTotal] = await pendingQueryBuilder.getManyAndCount();
 
-    const [requisitions, total] = await queryBuilder.getManyAndCount();
+    // Query 2: Obtener últimas 20 requisiciones procesadas (cotizadas y posteriores)
+    const processedQueryBuilder = queryBuilder.clone()
+      .where('requisitionStatus.code IN (:...statuses)', {
+        statuses: ['cotizada', 'en_orden_compra', 'pendiente_recepcion', 'en_recepcion', 'recepcion_completa']
+      })
+      .orderBy('requisition.createdAt', 'DESC')
+      .take(20); // Limitar a 20 procesadas
+
+    const [processedRequisitions, processedTotal] = await processedQueryBuilder.getManyAndCount();
+
+    // Combinar resultados: pendientes primero, luego procesadas
+    const requisitions = [...pendingRequisitions, ...processedRequisitions];
+    const total = pendingTotal + processedTotal;
 
     // Calcular SLA para cada requisición
     const requisitionsWithSLA = requisitions.map(req => {
@@ -1410,6 +1455,8 @@ export class PurchasesService {
         'status',
         'operationCenter',
         'projectCode',
+        'purchaseOrders',
+        'purchaseOrders.approvalStatus',
       ],
     });
 
@@ -1417,11 +1464,18 @@ export class PurchasesService {
       throw new NotFoundException('Requisición no encontrada');
     }
 
-    // Validar estado - permitir editar hasta que se cree la orden de compra
-    const validStatuses = ['aprobada_gerencia', 'en_cotizacion', 'cotizada'];
+    // Validar estado - permitir visualizar en cualquier estado después de aprobación de gerencia
+    // Incluye estados con órdenes de compra para permitir visualización en modo solo lectura
+    const validStatuses = [
+      'aprobada_gerencia',
+      'en_cotizacion',
+      'cotizada',
+      'en_orden_compra',
+      'pendiente_recepcion',
+    ];
     if (!validStatuses.includes(requisition.status.code)) {
       throw new BadRequestException(
-        'Esta requisición no está disponible para cotización. Solo se pueden gestionar requisiciones aprobadas por gerencia que aún no tienen órdenes de compra.',
+        `Esta requisición no está disponible para visualización. Estado actual: ${requisition.status.code}`,
       );
     }
 
@@ -1977,6 +2031,8 @@ export class PurchasesService {
           orderSubtotal + orderTotalIva - orderTotalDiscount;
 
         // 4.3 Crear la orden de compra
+        const pendingApprovalStatusId = await this.getPurchaseOrderStatusId('pendiente_aprobacion_gerencia');
+
         const purchaseOrder = queryRunner.manager.create(PurchaseOrder, {
           purchaseOrderNumber,
           requisitionId,
@@ -1986,6 +2042,7 @@ export class PurchasesService {
           totalIva: orderTotalIva,
           totalDiscount: orderTotalDiscount,
           totalAmount: orderTotalAmount,
+          approvalStatusId: pendingApprovalStatusId,
           createdBy: userId,
         });
 
@@ -2020,9 +2077,9 @@ export class PurchasesService {
         createdPurchaseOrders.push(purchaseOrder);
       }
 
-      // 5. Cambiar estado de la requisición a "pendiente_recepcion"
+      // 5. Cambiar estado de la requisición a "en_orden_compra"
       const previousStatus = requisition.status.code;
-      const newStatusId = await this.getStatusIdByCode('pendiente_recepcion');
+      const newStatusId = await this.getStatusIdByCode('en_orden_compra');
 
       // Usar UPDATE explícito para garantizar que se ejecute la query
       await queryRunner.manager.update(
@@ -2037,7 +2094,7 @@ export class PurchasesService {
         userId,
         action: 'crear_ordenes_compra',
         previousStatus,
-        newStatus: 'pendiente_recepcion',
+        newStatus: 'en_orden_compra',
         comments: `Se generaron ${createdPurchaseOrders.length} orden(es) de compra`,
       });
       await queryRunner.manager.save(log);
@@ -2057,7 +2114,7 @@ export class PurchasesService {
       return {
         requisitionId,
         previousStatus,
-        newStatus: 'pendiente_recepcion',
+        newStatus: 'en_orden_compra',
         purchaseOrders: ordersWithRelations,
       };
     } catch (error) {
@@ -2131,7 +2188,7 @@ export class PurchasesService {
       .leftJoinAndSelect('items.receipts', 'receipts')
       .where('requisition.createdBy = :userId', { userId })
       .andWhere('status.code IN (:...statuses)', {
-        statuses: ['pendiente_recepcion', 'en_recepcion'],
+        statuses: ['pendiente_recepcion', 'en_recepcion', 'recepcion_completa'],
       })
       .orderBy('requisition.createdAt', 'ASC')
       .skip(skip)
@@ -2271,6 +2328,19 @@ export class PurchasesService {
       ) {
         throw new BadRequestException(
           'Esta requisición no está disponible para recepción de materiales',
+        );
+      }
+
+      // 2.1. VALIDAR QUE TODAS LAS ÓRDENES DE COMPRA ESTÉN APROBADAS
+      const approvedStatusId = await this.getPurchaseOrderStatusId('aprobada_gerencia');
+      const unapprovedOrders = requisition.purchaseOrders?.filter(
+        po => po.approvalStatusId !== approvedStatusId
+      );
+
+      if (unapprovedOrders && unapprovedOrders.length > 0) {
+        const orderNumbers = unapprovedOrders.map(po => po.purchaseOrderNumber).join(', ');
+        throw new BadRequestException(
+          `No se puede registrar la recepción porque las siguientes órdenes de compra no han sido aprobadas por Gerencia: ${orderNumbers}. Estado ID: ${unapprovedOrders[0].approvalStatusId}`,
         );
       }
 
@@ -2615,6 +2685,7 @@ export class PurchasesService {
         'items.requisitionItem',
         'items.requisitionItem.material',
         'items.quotation',
+        'approvalStatus',
       ],
     });
 
@@ -2666,5 +2737,512 @@ export class PurchasesService {
       },
       purchaseOrders,
     };
+  }
+
+  // ============================================
+  // PURCHASE ORDER APPROVAL - APROBACIÓN DE ÓRDENES DE COMPRA
+  // ============================================
+
+  /**
+   * Obtener órdenes de compra pendientes de aprobación por Gerencia
+   */
+  async getPendingPurchaseOrdersForApproval(
+    userId: number,
+    page: number = 1,
+    limit: number = 10,
+  ) {
+    // Validar que el usuario es Gerencia
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    if (user.role.nombreRol !== 'Gerencia') {
+      throw new ForbiddenException(
+        'Solo el rol Gerencia puede aprobar órdenes de compra',
+      );
+    }
+
+    // Query 1: Obtener TODAS las OCs pendientes (sin límite)
+    const pendingQueryBuilder = this.purchaseOrderRepository
+      .createQueryBuilder('po')
+      .leftJoinAndSelect('po.requisition', 'requisition')
+      .leftJoinAndSelect('requisition.operationCenter', 'operationCenter')
+      .leftJoinAndSelect('operationCenter.company', 'company')
+      .leftJoinAndSelect('po.supplier', 'supplier')
+      .leftJoinAndSelect('po.creator', 'creator')
+      .leftJoinAndSelect('po.items', 'items')
+      .leftJoinAndSelect('items.requisitionItem', 'requisitionItem')
+      .leftJoinAndSelect('requisitionItem.material', 'material')
+      .leftJoinAndSelect('po.approvals', 'approvals')
+      .leftJoinAndSelect('approvals.approver', 'approver')
+      .leftJoinAndSelect('po.approvalStatus', 'poApprovalStatus');
+
+    const pendingStatusId = await this.getPurchaseOrderStatusId('pendiente_aprobacion_gerencia');
+    pendingQueryBuilder
+      .where('po.approvalStatusId = :statusId', {
+        statusId: pendingStatusId,
+      })
+      .orderBy('po.createdAt', 'DESC');
+
+    const [pendingOrders, pendingTotal] = await pendingQueryBuilder.getManyAndCount();
+
+    // Query 2: Obtener últimas 20 OCs procesadas (aprobadas o rechazadas)
+    const processedQueryBuilder = this.purchaseOrderRepository
+      .createQueryBuilder('po')
+      .leftJoinAndSelect('po.requisition', 'requisition')
+      .leftJoinAndSelect('requisition.operationCenter', 'operationCenter')
+      .leftJoinAndSelect('operationCenter.company', 'company')
+      .leftJoinAndSelect('po.supplier', 'supplier')
+      .leftJoinAndSelect('po.creator', 'creator')
+      .leftJoinAndSelect('po.items', 'items')
+      .leftJoinAndSelect('items.requisitionItem', 'requisitionItem')
+      .leftJoinAndSelect('requisitionItem.material', 'material')
+      .leftJoinAndSelect('po.approvals', 'approvals')
+      .leftJoinAndSelect('approvals.approver', 'approver')
+      .leftJoinAndSelect('po.approvalStatus', 'poApprovalStatus');
+
+    const approvedStatusId = await this.getPurchaseOrderStatusId('aprobada_gerencia');
+    const rejectedStatusId = await this.getPurchaseOrderStatusId('rechazada_gerencia');
+    processedQueryBuilder
+      .where('po.approvalStatusId IN (:...statusIds)', {
+        statusIds: [approvedStatusId, rejectedStatusId],
+      })
+      .orderBy('po.createdAt', 'DESC')
+      .take(20); // Limitar a 20 procesadas
+
+    const [processedOrders, processedTotal] = await processedQueryBuilder.getManyAndCount();
+
+    // Combinar resultados: pendientes primero, luego procesadas
+    const purchaseOrders = [...pendingOrders, ...processedOrders];
+    const total = pendingTotal + processedTotal;
+
+    // Calcular si está vencida (deadline de 1 día hábil desde creación)
+    const purchaseOrdersWithDeadline = purchaseOrders.map((po) => {
+      const deadline = addBusinessDays(po.createdAt, 1);
+      const isOverdue = new Date() > deadline;
+      const daysOverdue = isOverdue
+        ? calculateBusinessDaysBetween(deadline, new Date())
+        : 0;
+
+      return {
+        ...po,
+        deadline,
+        isOverdue,
+        daysOverdue,
+      };
+    });
+
+    return {
+      data: purchaseOrdersWithDeadline,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Obtener detalle de una orden de compra para aprobar
+   */
+  async getPurchaseOrderForApproval(purchaseOrderId: number, userId: number) {
+    // Validar que el usuario es Gerencia
+    const user = await this.userRepository.findOne({
+      where: { userId },
+      relations: ['role'],
+    });
+
+    if (!user || user.role.nombreRol !== 'Gerencia') {
+      throw new ForbiddenException(
+        'Solo el rol Gerencia puede ver órdenes de compra para aprobar',
+      );
+    }
+
+    const purchaseOrder = await this.purchaseOrderRepository.findOne({
+      where: { purchaseOrderId },
+      relations: [
+        'requisition',
+        'requisition.operationCenter',
+        'requisition.operationCenter.company',
+        'requisition.projectCode',
+        'supplier',
+        'creator',
+        'items',
+        'items.requisitionItem',
+        'items.requisitionItem.material',
+        'items.requisitionItem.material.materialGroup',
+        'items.quotation',
+        'approvals',
+        'approvals.approver',
+        'approvalStatus',
+      ],
+    });
+
+    if (!purchaseOrder) {
+      throw new NotFoundException(
+        `Orden de compra con ID ${purchaseOrderId} no encontrada`,
+      );
+    }
+
+    // Calcular deadline
+    const deadline = addBusinessDays(purchaseOrder.createdAt, 1);
+    const isOverdue = new Date() > deadline;
+    const daysOverdue = isOverdue
+      ? calculateBusinessDaysBetween(deadline, new Date())
+      : 0;
+
+    return {
+      ...purchaseOrder,
+      deadline,
+      isOverdue,
+      daysOverdue,
+    };
+  }
+
+  /**
+   * Aprobar o rechazar ítems de una orden de compra
+   * Si todos los ítems son aprobados, la OC se aprueba
+   * Si algún ítem es rechazado, la OC se rechaza con justificación
+   */
+  async approvePurchaseOrder(
+    purchaseOrderId: number,
+    userId: number,
+    dto: ApprovePurchaseOrderDto,
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Validar usuario
+      const user = await queryRunner.manager.findOne(User, {
+        where: { userId },
+        relations: ['role'],
+      });
+
+      if (!user || user.role.nombreRol !== 'Gerencia') {
+        throw new ForbiddenException(
+          'Solo el rol Gerencia puede aprobar órdenes de compra',
+        );
+      }
+
+      // 2. Obtener orden de compra
+      const purchaseOrder = await queryRunner.manager.findOne(PurchaseOrder, {
+        where: { purchaseOrderId },
+        relations: ['items', 'approvalStatus'],
+      });
+
+      if (!purchaseOrder) {
+        throw new NotFoundException('Orden de compra no encontrada');
+      }
+
+      // 3. Validar estado
+      const pendingStatusId = await this.getPurchaseOrderStatusId('pendiente_aprobacion_gerencia');
+      if (purchaseOrder.approvalStatusId !== pendingStatusId) {
+        throw new BadRequestException(
+          `Esta orden de compra no puede ser aprobada. Estado actual ID: ${purchaseOrder.approvalStatusId}`,
+        );
+      }
+
+      // 4. Validar que todos los ítems de la OC están en la decisión
+      if (dto.items.length !== purchaseOrder.items.length) {
+        throw new BadRequestException(
+          `Debe proporcionar una decisión para todos los ${purchaseOrder.items.length} ítems de la orden de compra`,
+        );
+      }
+
+      // 5. Determinar si es aprobación o rechazo
+      const allApproved = dto.items.every(
+        (item) => item.decision === 'approved',
+      );
+      const anyRejected = dto.items.some(
+        (item) => item.decision === 'rejected',
+      );
+
+      if (anyRejected && !dto.rejectionReason) {
+        throw new BadRequestException(
+          'Debe proporcionar una razón de rechazo cuando se rechaza algún ítem',
+        );
+      }
+
+      // 6. Crear registro de aprobación
+      const deadline = addBusinessDays(purchaseOrder.createdAt, 1);
+      const isOverdue = new Date() > deadline;
+
+      const approval = queryRunner.manager.create(PurchaseOrderApproval, {
+        purchaseOrderId,
+        approverId: userId,
+        approvalStatus: allApproved ? ApprovalStatus.APPROVED : ApprovalStatus.REJECTED,
+        comments: dto.generalComments || null,
+        rejectionReason: dto.rejectionReason || null,
+        approvalDate: new Date(),
+        deadline,
+        isOverdue,
+      });
+
+      const savedApproval = await queryRunner.manager.save(approval);
+
+      // 7. Crear aprobaciones de ítems
+      for (const itemDto of dto.items) {
+        const itemApproval = queryRunner.manager.create(
+          PurchaseOrderItemApproval,
+          {
+            poApprovalId: savedApproval.approvalId,
+            poItemId: itemDto.poItemId,
+            approvalStatus:
+              itemDto.decision === 'approved' ? ItemApprovalStatus.APPROVED : ItemApprovalStatus.REJECTED,
+            comments: itemDto.comments || null,
+          },
+        );
+
+        await queryRunner.manager.save(itemApproval);
+      }
+
+      // 8. Actualizar estado de la orden de compra
+      let newStatusId: number;
+      if (allApproved) {
+        newStatusId = await this.getPurchaseOrderStatusId('aprobada_gerencia');
+      } else {
+        newStatusId = await this.getPurchaseOrderStatusId('rechazada_gerencia');
+        // Incrementar contador de rechazos
+        purchaseOrder.rejectionCount = (purchaseOrder.rejectionCount || 0) + 1;
+        purchaseOrder.lastRejectionReason = dto.rejectionReason || null;
+      }
+
+      // Actualizar estado de la orden de compra usando update para garantizar que se guarde
+      await queryRunner.manager.update(
+        PurchaseOrder,
+        { purchaseOrderId },
+        {
+          approvalStatusId: newStatusId,
+          currentApproverId: userId,
+          rejectionCount: allApproved ? purchaseOrder.rejectionCount : (purchaseOrder.rejectionCount || 0) + 1,
+          lastRejectionReason: allApproved ? purchaseOrder.lastRejectionReason : (dto.rejectionReason || null),
+        },
+      );
+
+      // 9. Si la OC fue aprobada, verificar si TODAS las OCs de la requisición están aprobadas
+      if (allApproved) {
+        // Obtener todas las órdenes de compra de esta requisición
+        const allPurchaseOrders = await queryRunner.manager.find(PurchaseOrder, {
+          where: { requisitionId: purchaseOrder.requisitionId },
+        });
+
+        // Verificar si todas están aprobadas
+        const approvedStatusId = await this.getPurchaseOrderStatusId('aprobada_gerencia');
+        const allOrdersApproved = allPurchaseOrders.every(
+          (po) => po.approvalStatusId === approvedStatusId,
+        );
+
+        if (allOrdersApproved) {
+          // Obtener la requisición para verificar su estado actual
+          const requisition = await queryRunner.manager.findOne(Requisition, {
+            where: { requisitionId: purchaseOrder.requisitionId },
+            relations: ['status'],
+          });
+
+          if (requisition && requisition.status.code === 'en_orden_compra') {
+            // Cambiar estado de la requisición a "pendiente_recepcion"
+            const previousReqStatus = requisition.status.code;
+            const pendingReceptionStatusId = await this.getStatusIdByCode('pendiente_recepcion');
+
+            await queryRunner.manager.update(
+              Requisition,
+              { requisitionId: requisition.requisitionId },
+              { statusId: pendingReceptionStatusId },
+            );
+
+            // Registrar log de cambio de estado de requisición
+            const reqLog = queryRunner.manager.create(RequisitionLog, {
+              requisitionId: requisition.requisitionId,
+              userId,
+              action: 'aprobar_todas_ordenes_compra',
+              previousStatus: previousReqStatus,
+              newStatus: 'pendiente_recepcion',
+              comments: 'Todas las órdenes de compra han sido aprobadas por Gerencia',
+            });
+            await queryRunner.manager.save(reqLog);
+          }
+        }
+      }
+
+      await queryRunner.commitTransaction();
+
+      // 10. Retornar orden actualizada
+      return this.getPurchaseOrderById(purchaseOrderId);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Rechazar una orden de compra completa con justificación
+   */
+  async rejectPurchaseOrder(
+    purchaseOrderId: number,
+    userId: number,
+    rejectionReason: string,
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Validar usuario
+      const user = await queryRunner.manager.findOne(User, {
+        where: { userId },
+        relations: ['role'],
+      });
+
+      if (!user || user.role.nombreRol !== 'Gerencia') {
+        throw new ForbiddenException(
+          'Solo el rol Gerencia puede rechazar órdenes de compra',
+        );
+      }
+
+      // 2. Obtener orden de compra
+      const purchaseOrder = await queryRunner.manager.findOne(PurchaseOrder, {
+        where: { purchaseOrderId },
+        relations: ['items', 'approvalStatus'],
+      });
+
+      if (!purchaseOrder) {
+        throw new NotFoundException('Orden de compra no encontrada');
+      }
+
+      // 3. Validar estado
+      const pendingStatusId = await this.getPurchaseOrderStatusId('pendiente_aprobacion_gerencia');
+      if (purchaseOrder.approvalStatusId !== pendingStatusId) {
+        throw new BadRequestException(
+          `Esta orden de compra no puede ser rechazada. Estado actual ID: ${purchaseOrder.approvalStatusId}`,
+        );
+      }
+
+      // 4. Validar que se proporcione razón
+      if (!rejectionReason || rejectionReason.trim() === '') {
+        throw new BadRequestException(
+          'La razón de rechazo es obligatoria',
+        );
+      }
+
+      // 5. Crear registro de aprobación con rechazo
+      const deadline = addBusinessDays(purchaseOrder.createdAt, 1);
+      const isOverdue = new Date() > deadline;
+
+      const approval = queryRunner.manager.create(PurchaseOrderApproval, {
+        purchaseOrderId,
+        approverId: userId,
+        approvalStatus: ApprovalStatus.REJECTED,
+        comments: null,
+        rejectionReason,
+        approvalDate: new Date(),
+        deadline,
+        isOverdue,
+      });
+
+      const savedApproval = await queryRunner.manager.save(approval);
+
+      // 6. Crear aprobaciones de ítems (todos rechazados)
+      for (const item of purchaseOrder.items) {
+        const itemApproval = queryRunner.manager.create(
+          PurchaseOrderItemApproval,
+          {
+            poApprovalId: savedApproval.approvalId,
+            poItemId: item.poItemId,
+            approvalStatus: ItemApprovalStatus.REJECTED,
+            comments: 'Rechazado junto con toda la orden de compra',
+          },
+        );
+
+        await queryRunner.manager.save(itemApproval);
+      }
+
+      // 7. Actualizar estado de la orden de compra
+      const rejectedStatusId = await this.getPurchaseOrderStatusId('rechazada_gerencia');
+      purchaseOrder.approvalStatusId = rejectedStatusId;
+      purchaseOrder.rejectionCount = (purchaseOrder.rejectionCount || 0) + 1;
+      purchaseOrder.lastRejectionReason = rejectionReason;
+      purchaseOrder.currentApproverId = userId;
+
+      await queryRunner.manager.save(purchaseOrder);
+
+      await queryRunner.commitTransaction();
+
+      // 8. Retornar orden actualizada
+      return this.getPurchaseOrderById(purchaseOrderId);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Reenviar una orden de compra rechazada después de correcciones (Compras)
+   */
+  async resubmitPurchaseOrder(
+    purchaseOrderId: number,
+    userId: number,
+    comments?: string,
+  ) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // 1. Validar usuario es Compras
+      const user = await queryRunner.manager.findOne(User, {
+        where: { userId },
+        relations: ['role'],
+      });
+
+      if (!user || user.role.nombreRol !== 'Compras') {
+        throw new ForbiddenException(
+          'Solo el rol Compras puede reenviar órdenes de compra',
+        );
+      }
+
+      // 2. Obtener orden de compra
+      const purchaseOrder = await queryRunner.manager.findOne(PurchaseOrder, {
+        where: { purchaseOrderId },
+        relations: ['approvalStatus'],
+      });
+
+      if (!purchaseOrder) {
+        throw new NotFoundException('Orden de compra no encontrada');
+      }
+
+      // 3. Validar que está rechazada
+      const rejectedStatusId = await this.getPurchaseOrderStatusId('rechazada_gerencia');
+      if (purchaseOrder.approvalStatusId !== rejectedStatusId) {
+        throw new BadRequestException(
+          'Solo se pueden reenviar órdenes de compra que han sido rechazadas',
+        );
+      }
+
+      // 4. Cambiar estado a pendiente de aprobación
+      const pendingStatusId = await this.getPurchaseOrderStatusId('pendiente_aprobacion_gerencia');
+      purchaseOrder.approvalStatusId = pendingStatusId;
+
+      await queryRunner.manager.save(purchaseOrder);
+
+      await queryRunner.commitTransaction();
+
+      // 5. Retornar orden actualizada
+      return this.getPurchaseOrderById(purchaseOrderId);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 }

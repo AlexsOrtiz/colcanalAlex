@@ -8,6 +8,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { PurchasesModule } from './modules/purchases/purchases.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
 import configuration from './config/configuration';
 
 @Module({
@@ -28,6 +29,7 @@ import configuration from './config/configuration';
     PurchasesModule,
     SuppliersModule,
     AuditModule,
+    InvoicesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

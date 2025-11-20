@@ -14,6 +14,7 @@ import { ProjectCode } from '../entities/project-code.entity';
 import { RequisitionPrefix } from '../entities/requisition-prefix.entity';
 import { RequisitionSequence } from '../entities/requisition-sequence.entity';
 import { RequisitionStatus } from '../entities/requisition-status.entity';
+import { PurchaseOrderStatus } from '../entities/purchase-order-status.entity';
 import { MaterialGroup } from '../entities/material-group.entity';
 import { Material } from '../entities/material.entity';
 import { Authorization } from '../entities/authorization.entity';
@@ -43,6 +44,8 @@ async function seed() {
       dataSource.getRepository(RequisitionSequence);
     const requisitionStatusRepository =
       dataSource.getRepository(RequisitionStatus);
+    const purchaseOrderStatusRepository =
+      dataSource.getRepository(PurchaseOrderStatus);
     const materialGroupRepository = dataSource.getRepository(MaterialGroup);
     const materialRepository = dataSource.getRepository(Material);
     const authorizationRepository = dataSource.getRepository(Authorization);
@@ -736,7 +739,63 @@ async function seed() {
     );
 
     // ============================================
-    // 12. SEED MATERIAL GROUPS
+    // 12. SEED PURCHASE ORDER STATUSES
+    // ============================================
+    console.log('Seeding purchase order statuses...');
+    const purchaseOrderStatusesData = [
+      {
+        code: 'borrador',
+        name: 'Borrador',
+        description: 'Orden de compra en borrador',
+        color: 'gray',
+        order: 1,
+      },
+      {
+        code: 'pendiente_aprobacion_gerencia',
+        name: 'Pendiente de aprobación',
+        description: 'En espera de aprobación de gerencia',
+        color: 'yellow',
+        order: 2,
+      },
+      {
+        code: 'aprobada_gerencia',
+        name: 'Aprobada',
+        description: 'Aprobada por gerencia',
+        color: 'green',
+        order: 3,
+      },
+      {
+        code: 'rechazada_gerencia',
+        name: 'Rechazada',
+        description: 'Rechazada por gerencia',
+        color: 'red',
+        order: 4,
+      },
+      {
+        code: 'en_recepcion',
+        name: 'En recepción',
+        description: 'Materiales en proceso de recepción',
+        color: 'blue',
+        order: 5,
+      },
+      {
+        code: 'completada',
+        name: 'Completada',
+        description: 'Orden de compra completada',
+        color: 'teal',
+        order: 6,
+      },
+    ];
+
+    const purchaseOrderStatuses = await purchaseOrderStatusRepository.save(
+      purchaseOrderStatusesData,
+    );
+    console.log(
+      `✅ Created ${purchaseOrderStatuses.length} purchase order statuses`,
+    );
+
+    // ============================================
+    // 13. SEED MATERIAL GROUPS
     // ============================================
     console.log('Seeding material groups...');
     const materialGroupsData = [
@@ -752,7 +811,7 @@ async function seed() {
     console.log(`✅ Created ${materialGroups.length} material groups`);
 
     // ============================================
-    // 13. SEED MATERIALS (catálogo básico)
+    // 14. SEED MATERIALS (catálogo básico)
     // ============================================
     console.log('Seeding materials...');
 

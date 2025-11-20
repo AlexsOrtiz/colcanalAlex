@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getRequisitionQuotation,
@@ -52,8 +52,14 @@ interface ItemQuotationState {
 
 export default function GestionarCotizacionPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { requisitionId } = useParams<{ requisitionId: string }>();
   const { user } = useAuth();
+
+  // Determinar la ruta de retorno basada en la URL actual
+  const backPath = location.pathname.includes('/ordenes/')
+    ? '/dashboard/compras/ordenes'
+    : '/dashboard/compras/cotizaciones';
 
   const [requisition, setRequisition] = useState<RequisitionWithQuotations | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,11 +76,11 @@ export default function GestionarCotizacionPage() {
       return;
     }
     if (!requisitionId) {
-      navigate('/dashboard/compras/cotizaciones');
+      navigate(backPath);
       return;
     }
     loadRequisition();
-  }, [requisitionId, isCompras]);
+  }, [requisitionId, isCompras, backPath]);
 
   const loadRequisition = async () => {
     try {
@@ -357,7 +363,7 @@ export default function GestionarCotizacionPage() {
       await manageQuotation(Number(requisitionId), { items });
 
       alert('Cotizaciones guardadas exitosamente');
-      navigate('/dashboard/compras/cotizaciones');
+      navigate(backPath);
     } catch (err: any) {
       console.error('Error saving quotations:', err);
       setError(err.response?.data?.message || 'Error al guardar las cotizaciones');
@@ -368,6 +374,13 @@ export default function GestionarCotizacionPage() {
 
   const isEditable = () => {
     if (!requisition) return false;
+
+    // Si ya tiene órdenes de compra creadas, NO se puede editar
+    if (requisition.purchaseOrders && requisition.purchaseOrders.length > 0) {
+      return false;
+    }
+
+    // Si no tiene OCs, verificar el estado de la requisición
     return !NON_EDITABLE_STATUSES.includes(requisition.status.code);
   };
 
@@ -421,9 +434,9 @@ export default function GestionarCotizacionPage() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => navigate('/dashboard/compras/cotizaciones')}
+                onClick={() => navigate(backPath)}
                 className="hover:bg-[hsl(var(--canalco-neutral-200))]"
-                title="Volver a Cotizaciones"
+                title={backPath.includes('/ordenes') ? 'Volver a Órdenes de Compra' : 'Volver a Cotizaciones'}
               >
                 <ArrowLeft className="w-5 h-5" />
               </Button>
@@ -818,7 +831,7 @@ export default function GestionarCotizacionPage() {
         <div className="mt-6 flex justify-end space-x-4">
           <Button
             variant="outline"
-            onClick={() => navigate('/dashboard/compras/cotizaciones')}
+            onClick={() => navigate(backPath)}
             className="border-[hsl(var(--canalco-neutral-300))]"
           >
             {editable ? 'Cancelar' : 'Volver'}
@@ -846,10 +859,26 @@ export default function GestionarCotizacionPage() {
 
         {!editable && (
           <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <p className="text-sm text-blue-800">
-              <strong>Modo solo lectura:</strong> Esta requisición se encuentra en estado{' '}
-              <strong>{requisition.status.name}</strong> y ya no puede ser editada.
-            </p>
+            {requisition.purchaseOrders && requisition.purchaseOrders.length > 0 ? (
+              <div>
+                <p className="text-sm text-blue-800 mb-2">
+                  <strong>Modo solo lectura:</strong> Las cotizaciones no se pueden modificar porque ya se han creado {requisition.purchaseOrders.length} orden{requisition.purchaseOrders.length > 1 ? 'es' : ''} de compra.
+                </p>
+                <div className="text-xs text-blue-700 mt-2 space-y-1">
+                  <p className="font-semibold">Órdenes de compra asociadas:</p>
+                  {requisition.purchaseOrders.map((po) => (
+                    <div key={po.purchaseOrderId} className="ml-4">
+                      • {po.purchaseOrderNumber} - {po.approvalStatus.description} (${po.totalAmount.toLocaleString('es-CO', { minimumFractionDigits: 2 })})
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-blue-800">
+                <strong>Modo solo lectura:</strong> Esta requisición se encuentra en estado{' '}
+                <strong>{requisition.status.name}</strong> y ya no puede ser editada.
+              </p>
+            )}
           </div>
         )}
       </main>

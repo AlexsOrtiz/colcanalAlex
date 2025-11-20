@@ -289,7 +289,7 @@ export default function AuditoriasComprasDetallePage() {
                 </div>
               )}
               <div>
-                <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">Creado por</p>
+                <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">Solicitado por</p>
                 <p className="font-semibold text-[hsl(var(--canalco-neutral-900))]">
                   {requisition.creator?.nombre || 'N/A'}
                 </p>

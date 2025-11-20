@@ -42,7 +42,7 @@ interface ItemPriceState {
 
 export default function AsignarPreciosPage() {
   const navigate = useNavigate();
-  const { id } = useParams<{ id: string }>();
+  const { requisitionId } = useParams<{ requisitionId: string }>();
   const { user } = useAuth();
   const [requisition, setRequisition] = useState<RequisitionWithQuotations | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,14 +60,14 @@ export default function AsignarPreciosPage() {
       return;
     }
     loadRequisition();
-  }, [id, isCompras]);
+  }, [requisitionId, isCompras]);
 
   const loadRequisition = async () => {
-    if (!id) return;
+    if (!requisitionId) return;
     try {
       setLoading(true);
       setError(null);
-      const data = await getRequisitionWithPrices(parseInt(id));
+      const data = await getRequisitionWithPrices(parseInt(requisitionId));
       setRequisition(data);
       initializeItemPrices(data);
     } catch (err: any) {

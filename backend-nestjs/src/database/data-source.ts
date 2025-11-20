@@ -15,6 +15,11 @@ export const dataSourceOptions: DataSourceOptions = {
   migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
   synchronize: true, // ⚠️ TEMPORAL - Cambiado a true para crear tablas iniciales
   logging: process.env.NODE_ENV === 'development',
+  cache: {
+    type: 'database',
+    tableName: 'typeorm_query_cache',
+    duration: 86400000, // 24 horas (estados de catálogo no cambian frecuentemente)
+  },
   extra: {
     // Configurar zona horaria de Colombia en PostgreSQL
     timezone: 'America/Bogota',

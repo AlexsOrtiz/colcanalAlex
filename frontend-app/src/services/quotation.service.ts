@@ -29,8 +29,23 @@ export interface RequisitionItemWithQuotations extends RequisitionItem {
   quotations: RequisitionItemQuotation[];
 }
 
+// Simplified interface for Purchase Orders in quotation context
+export interface PurchaseOrderSummary {
+  purchaseOrderId: number;
+  purchaseOrderNumber: string;
+  approvalStatus: {
+    statusId: number;
+    code: string;
+    description: string;
+  };
+  supplierId: number;
+  totalAmount: number;
+  createdAt: string;
+}
+
 export interface RequisitionWithQuotations extends Omit<Requisition, 'items'> {
   items: RequisitionItemWithQuotations[];
+  purchaseOrders?: PurchaseOrderSummary[]; // OCs asociadas a la requisición
   user?: { name: string }; // Alias for creator, some endpoints return 'user' instead
   operationCenter?: { name: string; code: string };
 }

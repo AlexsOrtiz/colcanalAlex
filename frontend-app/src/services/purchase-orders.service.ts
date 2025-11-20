@@ -15,15 +15,48 @@ export interface PurchaseOrder {
   totalIva: number;
   totalDiscount: number;
   totalAmount: number;
+  approvalStatus?: {
+    statusId: number;
+    code: string;
+    name: string;
+    description: string;
+    color: string;
+    order: number;
+  };
+  approvalStatusId?: number;
+  rejectionCount?: number;
+  lastRejectionReason?: string | null;
+  currentApproverId?: number | null;
   createdBy: number;
   createdAt: string;
   updatedAt: string;
   supplier?: {
     supplierId: number;
     name: string;
-    nitCc: string;
+    nitCc?: string;
+    nit?: string;
+    contactName?: string;
+    contactPhone?: string;
+    contactEmail?: string;
   };
   items?: PurchaseOrderItem[];
+  requisition?: {
+    requisitionId: number;
+    requisitionNumber: string;
+    operationCenter?: {
+      centerId: number;
+      code: string;
+      name: string;
+      company?: {
+        companyId: number;
+        name: string;
+      };
+    };
+  };
+  approvals?: PurchaseOrderApproval[];
+  deadline?: string;
+  isOverdue?: boolean;
+  daysOverdue?: number;
 }
 
 export interface PurchaseOrderItem {
@@ -39,6 +72,22 @@ export interface PurchaseOrderItem {
   ivaAmount: number;
   discount: number;
   totalAmount: number;
+  requisitionItem?: {
+    itemId: number;
+    itemNumber: number;
+    material: {
+      materialId: number;
+      code: string;
+      name: string;
+      unit: string;
+      materialGroup?: {
+        groupId: number;
+        name: string;
+      };
+    };
+    quantity: number;
+    observation: string;
+  };
 }
 
 export interface ItemPriceDto {
@@ -84,6 +133,44 @@ export interface MaterialPriceHistory {
   supplierName?: string;
 }
 
+export interface PurchaseOrderApproval {
+  approvalId: number;
+  purchaseOrderId: number;
+  approverId: number;
+  approvalStatus: 'pendiente' | 'aprobado' | 'rechazado';
+  comments: string | null;
+  rejectionReason: string | null;
+  approvalDate: string;
+  deadline: string;
+  isOverdue: boolean;
+  createdAt: string;
+  approver?: {
+    userId: number;
+    nombre: string;
+    email: string;
+  };
+  itemApprovals?: PurchaseOrderItemApproval[];
+}
+
+export interface PurchaseOrderItemApproval {
+  itemApprovalId: number;
+  poApprovalId: number;
+  poItemId: number;
+  approvalStatus: 'pendiente' | 'aprobado' | 'rechazado';
+  comments: string | null;
+  createdAt: string;
+}
+
+export interface ApprovePurchaseOrderDto {
+  items: {
+    poItemId: number;
+    decision: 'approved' | 'rejected';
+    comments?: string;
+  }[];
+  generalComments?: string;
+  rejectionReason?: string;
+}
+
 // ============================================
 // API METHODS
 // ============================================
@@ -100,7 +187,7 @@ export const getRequisitionsForPurchaseOrders = async (filters?: {
   toDate?: string;
 }): Promise<PaginatedResponse<any>> => {
   const response = await api.get('/purchases/requisitions/for-quotation', {
-    params: { ...filters, status: 'cotizada' },
+    params: { ...filters },
   });
   return response.data;
 };
@@ -181,4 +268,78 @@ export const getLatestMaterialPrice = async (
     console.error('Error fetching material price history:', error);
     return null;
   }
+};
+
+// ============================================
+// PURCHASE ORDER APPROVAL METHODS
+// ============================================
+
+/**
+ * Get purchase orders pending approval for Gerencia
+ */
+export const getPendingPurchaseOrdersForApproval = async (
+  page: number = 1,
+  limit: number = 10
+): Promise<PaginatedResponse<PurchaseOrder>> => {
+  const response = await api.get<PaginatedResponse<PurchaseOrder>>(
+    '/purchases/requisitions/purchase-orders/pending-approval',
+    {
+      params: { page, limit },
+    }
+  );
+  return response.data;
+};
+
+/**
+ * Get purchase order detail for approval
+ */
+export const getPurchaseOrderForApproval = async (
+  purchaseOrderId: number
+): Promise<PurchaseOrder> => {
+  const response = await api.get<PurchaseOrder>(
+    `/purchases/requisitions/purchase-orders/${purchaseOrderId}/for-approval`
+  );
+  return response.data;
+};
+
+/**
+ * Approve or reject items of a purchase order
+ */
+export const approvePurchaseOrder = async (
+  purchaseOrderId: number,
+  data: ApprovePurchaseOrderDto
+): Promise<PurchaseOrder> => {
+  const response = await api.post<PurchaseOrder>(
+    `/purchases/requisitions/purchase-orders/${purchaseOrderId}/approve`,
+    data
+  );
+  return response.data;
+};
+
+/**
+ * Reject an entire purchase order
+ */
+export const rejectPurchaseOrder = async (
+  purchaseOrderId: number,
+  rejectionReason: string
+): Promise<PurchaseOrder> => {
+  const response = await api.post<PurchaseOrder>(
+    `/purchases/requisitions/purchase-orders/${purchaseOrderId}/reject`,
+    { rejectionReason }
+  );
+  return response.data;
+};
+
+/**
+ * Resubmit a rejected purchase order (Compras role)
+ */
+export const resubmitPurchaseOrder = async (
+  purchaseOrderId: number,
+  comments?: string
+): Promise<PurchaseOrder> => {
+  const response = await api.patch<PurchaseOrder>(
+    `/purchases/requisitions/purchase-orders/${purchaseOrderId}/resubmit`,
+    { comments }
+  );
+  return response.data;
 };

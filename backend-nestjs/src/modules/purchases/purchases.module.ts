@@ -26,8 +26,11 @@ import { RequisitionItemQuotation } from '../../database/entities/requisition-it
 import { PurchaseOrder } from '../../database/entities/purchase-order.entity';
 import { PurchaseOrderItem } from '../../database/entities/purchase-order-item.entity';
 import { PurchaseOrderSequence } from '../../database/entities/purchase-order-sequence.entity';
+import { PurchaseOrderStatus } from '../../database/entities/purchase-order-status.entity';
 import { MaterialReceipt } from '../../database/entities/material-receipt.entity';
 import { MaterialPriceHistory } from '../../database/entities/material-price-history.entity';
+import { PurchaseOrderApproval } from '../../database/entities/purchase-order-approval.entity';
+import { PurchaseOrderItemApproval } from '../../database/entities/purchase-order-item-approval.entity';
 
 @Module({
   imports: [
@@ -57,8 +60,11 @@ import { MaterialPriceHistory } from '../../database/entities/material-price-his
       PurchaseOrder,
       PurchaseOrderItem,
       PurchaseOrderSequence,
+      PurchaseOrderStatus,
       MaterialReceipt,
       MaterialPriceHistory,
+      PurchaseOrderApproval,
+      PurchaseOrderItemApproval,
     ]),
   ],
   controllers: [MasterDataController, PurchasesController],

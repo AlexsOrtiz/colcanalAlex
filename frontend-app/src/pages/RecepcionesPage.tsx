@@ -5,7 +5,7 @@ import { getMyPendingReceipts } from '@/services/receipts.service';
 import type { RequisitionWithReceipts, FilterReceiptsParams } from '@/services/receipts.service';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Home, Menu, Edit, AlertCircle, ArrowLeft } from 'lucide-react';
+import { Home, Menu, Edit, AlertCircle, ArrowLeft, CheckCircle } from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -36,6 +36,10 @@ export default function RecepcionesPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const limit = 10;
+
+  // Paginación para sección de completadas (10 por página)
+  const [processedPage, setProcessedPage] = useState(1);
+  const processedLimit = 10;
 
   useEffect(() => {
     loadPendingReceipts();
@@ -246,7 +250,7 @@ export default function RecepcionesPage() {
         {/* Info Message */}
         <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
           <p className="text-sm text-blue-800">
-            Aquí puedes ver y registrar las recepciones de materiales de tus requisiciones con órdenes de compra generadas.
+            Aquí puedes ver y registrar las recepciones de materiales. Se muestra el historial completo: pendientes, en proceso y completadas.
           </p>
         </div>
 
@@ -266,190 +270,367 @@ export default function RecepcionesPage() {
         )}
 
         {/* Table */}
-        {!loading && !error && (
+        {!loading && !error && requisitions.length === 0 && (
+          <div className="bg-white rounded-lg shadow-md border border-[hsl(var(--canalco-neutral-300))] p-12 text-center">
+            <p className="text-[hsl(var(--canalco-neutral-600))]">
+              No tienes requisiciones pendientes de recepción.
+            </p>
+          </div>
+        )}
+
+        {!loading && !error && requisitions.length > 0 && (
           <div className="bg-white rounded-lg shadow-md border border-[hsl(var(--canalco-neutral-300))] overflow-hidden">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-[hsl(var(--canalco-neutral-100))]">
-                    <TableHead className="font-semibold w-[120px]">N° Requisición</TableHead>
-                    <TableHead className="font-semibold">Empresa</TableHead>
-                    <TableHead className="font-semibold">Proyecto/Obra</TableHead>
-                    <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
-                    <TableHead className="font-semibold">Creado por</TableHead>
-                    <TableHead className="font-semibold">Última Actualización</TableHead>
-                    <TableHead className="font-semibold">Estado</TableHead>
-                    <TableHead className="font-semibold">Plazo</TableHead>
-                    <TableHead className="font-semibold">Progreso</TableHead>
-                    <TableHead className="font-semibold text-center">Acciones</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {requisitions.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={10} className="text-center py-12 text-[hsl(var(--canalco-neutral-600))]">
-                        No tienes requisiciones pendientes de recepción.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    requisitions.map((req) => {
-                      const { totalItems, receivedItems } = calculateProgress(req);
+            {/* Pending/In Progress Receipts Section */}
+            {(() => {
+              const pendingReceipts = requisitions.filter(r =>
+                ['pendiente_recepcion', 'en_recepcion'].includes(r.status?.code || '')
+              );
 
-                      // Determinar última actualización según estado
-                      const getLastAction = () => {
-                        switch (req.status?.code) {
-                          case 'pendiente_recepcion':
-                            return { label: 'Orden Generada', date: req.purchaseOrderDate || req.updatedAt };
-                          case 'en_recepcion':
-                            return { label: 'En Recepción', date: req.updatedAt };
-                          case 'recepcion_completa':
-                            return { label: 'Recepción Completa', date: req.updatedAt };
-                          default:
-                            return { label: 'Actualizada', date: req.updatedAt };
-                        }
-                      };
+              if (pendingReceipts.length === 0) return null;
 
-                      const lastAction = getLastAction();
-
-                      return (
-                        <TableRow key={req.requisitionId} className="hover:bg-[hsl(var(--canalco-neutral-100))] transition-colors">
-                          <TableCell className="font-mono font-semibold text-[hsl(var(--canalco-primary))]">
-                            {req.requisitionNumber}
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-900))]">
-                              {req.company?.name || '-'}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-sm text-[hsl(var(--canalco-neutral-700))]">
-                              {req.obra || req.project?.name || '-'}
-                            </p>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-[hsl(var(--canalco-primary))]/10 text-[hsl(var(--canalco-primary))] font-semibold text-sm">
-                              {totalItems || 0}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            <div>
-                              <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-900))]">
-                                {req.creator?.nombre || 'N/A'}
-                              </p>
-                              <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
-                                {req.creator?.role?.nombreRol || '-'}
-                              </p>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div>
-                              <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
-                                {lastAction.label}
-                              </p>
-                              <p className="text-sm text-[hsl(var(--canalco-neutral-700))]">
-                                {formatDateShort(lastAction.date)}
-                              </p>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={`${STATUS_COLORS[req.status.code] || 'bg-gray-100'} border`}
-                            >
-                              {getStatusLabel(req.status.code)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {req.slaDeadline ? (
-                              <div className="text-sm flex flex-col gap-0.5">
-                                {req.isOverdue ? (
-                                  <>
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-red-600">❌</span>
-                                      <span className="text-red-600 font-medium">Vencida</span>
-                                    </div>
-                                    {req.daysOverdue > 0 && (
-                                      <span className="text-xs text-red-500">
-                                        Hace {req.daysOverdue} día{req.daysOverdue !== 1 ? 's' : ''}
-                                      </span>
-                                    )}
-                                  </>
-                                ) : (
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-green-600">✅</span>
-                                    <span className="text-green-600 font-medium">A tiempo</span>
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-xs text-[hsl(var(--canalco-neutral-400))]">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium">
-                                {receivedItems} / {totalItems} ítems
-                              </span>
-                              <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-blue-600 transition-all"
-                                  style={{
-                                    width: `${totalItems > 0 ? (receivedItems / totalItems) * 100 : 0}%`
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center justify-center gap-2">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleRegisterReceipt(req)}
-                                className="hover:bg-orange-50"
-                                title="Registrar recepción"
-                              >
-                                <Edit className="w-4 h-4 text-orange-600" />
-                              </Button>
-                            </div>
-                          </TableCell>
+              return (
+                <div>
+                  <div className="bg-orange-50 border-b border-orange-200 px-4 py-2">
+                    <p className="text-sm font-semibold text-orange-800 flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4" />
+                      PENDIENTES DE RECEPCIONAR ({pendingReceipts.length})
+                    </p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-[hsl(var(--canalco-neutral-100))]">
+                          <TableHead className="font-semibold w-[120px]">N° Requisición</TableHead>
+                          <TableHead className="font-semibold">Empresa</TableHead>
+                          <TableHead className="font-semibold">Proyecto/Obra</TableHead>
+                          <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
+                          <TableHead className="font-semibold">Solicitado por</TableHead>
+                          <TableHead className="font-semibold">Última Actualización</TableHead>
+                          <TableHead className="font-semibold">Estado</TableHead>
+                          <TableHead className="font-semibold">Plazo</TableHead>
+                          <TableHead className="font-semibold">Progreso</TableHead>
+                          <TableHead className="font-semibold text-center">Acciones</TableHead>
                         </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                      </TableHeader>
+                      <TableBody>
+                        {pendingReceipts.map((req) => {
+                          const { totalItems, receivedItems } = calculateProgress(req);
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="border-t border-[hsl(var(--canalco-neutral-300))] p-4 flex items-center justify-between">
-                <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">
-                  Mostrando {(page - 1) * limit + 1} - {Math.min(page * limit, total)} de {total} requisiciones
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage(Math.max(1, page - 1))}
-                    disabled={page === 1}
-                  >
-                    Anterior
-                  </Button>
-                  <span className="text-sm text-[hsl(var(--canalco-neutral-700))]">
-                    Página {page} de {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage(Math.min(totalPages, page + 1))}
-                    disabled={page === totalPages}
-                  >
-                    Siguiente
-                  </Button>
+                          // Determinar última actualización según estado
+                          const getLastAction = () => {
+                            switch (req.status?.code) {
+                              case 'pendiente_recepcion':
+                                return { label: 'Orden Generada', date: req.purchaseOrderDate || req.updatedAt };
+                              case 'en_recepcion':
+                                return { label: 'En Recepción', date: req.updatedAt };
+                              default:
+                                return { label: 'Actualizada', date: req.updatedAt };
+                            }
+                          };
+
+                          const lastAction = getLastAction();
+
+                          return (
+                            <TableRow key={req.requisitionId} className="hover:bg-[hsl(var(--canalco-neutral-100))] transition-colors">
+                              <TableCell className="font-mono font-semibold text-[hsl(var(--canalco-primary))]">
+                                {req.requisitionNumber}
+                              </TableCell>
+                              <TableCell>
+                                <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-900))]">
+                                  {req.company?.name || '-'}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                <p className="text-sm text-[hsl(var(--canalco-neutral-700))]">
+                                  {req.obra || req.project?.name || '-'}
+                                </p>
+                              </TableCell>
+                              <TableCell className="text-center">
+                                <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-[hsl(var(--canalco-primary))]/10 text-[hsl(var(--canalco-primary))] font-semibold text-sm">
+                                  {totalItems || 0}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-900))]">
+                                    {req.creator?.nombre || 'N/A'}
+                                  </p>
+                                  <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
+                                    {req.creator?.role?.nombreRol || '-'}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
+                                    {lastAction.label}
+                                  </p>
+                                  <p className="text-sm text-[hsl(var(--canalco-neutral-700))]">
+                                    {formatDateShort(lastAction.date)}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant="outline"
+                                  className={`${STATUS_COLORS[req.status.code] || 'bg-gray-100'} border`}
+                                >
+                                  {getStatusLabel(req.status.code)}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {req.slaDeadline ? (
+                                  <div className="text-sm flex flex-col gap-0.5">
+                                    {req.isOverdue ? (
+                                      <>
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-red-600">❌</span>
+                                          <span className="text-red-600 font-medium">Vencida</span>
+                                        </div>
+                                        {req.daysOverdue > 0 && (
+                                          <span className="text-xs text-red-500">
+                                            Hace {req.daysOverdue} día{req.daysOverdue !== 1 ? 's' : ''}
+                                          </span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-green-600">✅</span>
+                                        <span className="text-green-600 font-medium">A tiempo</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-[hsl(var(--canalco-neutral-400))]">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium">
+                                    {receivedItems} / {totalItems} ítems
+                                  </span>
+                                  <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full bg-blue-600 transition-all"
+                                      style={{
+                                        width: `${totalItems > 0 ? (receivedItems / totalItems) * 100 : 0}%`
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center justify-center gap-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleRegisterReceipt(req)}
+                                    className="hover:bg-orange-50"
+                                    title="Registrar recepción"
+                                  >
+                                    <Edit className="w-4 h-4 text-orange-600" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
+
+            {/* Completed Receipts Section */}
+            {(() => {
+              const completedReceipts = requisitions.filter(r => r.status?.code === 'recepcion_completa');
+
+              if (completedReceipts.length === 0) return null;
+
+              // Paginación interna: 10 por página
+              const totalCompleted = completedReceipts.length;
+              const processedTotalPages = Math.ceil(totalCompleted / processedLimit);
+              const processedStartIndex = (processedPage - 1) * processedLimit;
+              const processedEndIndex = processedStartIndex + processedLimit;
+              const paginatedCompletedReceipts = completedReceipts.slice(processedStartIndex, processedEndIndex);
+
+              return (
+                <div className={requisitions.filter(r => ['pendiente_recepcion', 'en_recepcion'].includes(r.status?.code || '')).length > 0 ? 'border-t-4 border-[hsl(var(--canalco-neutral-200))]' : ''}>
+                  <div className="bg-green-50 border-b border-green-200 px-4 py-2">
+                    <p className="text-sm font-semibold text-green-800 flex items-center gap-2">
+                      <CheckCircle className="h-4 w-4" />
+                      RECEPCIONES COMPLETADAS ({completedReceipts.length})
+                    </p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-[hsl(var(--canalco-neutral-100))]">
+                          <TableHead className="font-semibold w-[120px]">N° Requisición</TableHead>
+                          <TableHead className="font-semibold">Empresa</TableHead>
+                          <TableHead className="font-semibold">Proyecto/Obra</TableHead>
+                          <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
+                          <TableHead className="font-semibold">Solicitado por</TableHead>
+                          <TableHead className="font-semibold">Última Actualización</TableHead>
+                          <TableHead className="font-semibold">Estado</TableHead>
+                          <TableHead className="font-semibold">Plazo</TableHead>
+                          <TableHead className="font-semibold">Progreso</TableHead>
+                          <TableHead className="font-semibold text-center">Acciones</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedCompletedReceipts.map((req) => {
+                          const { totalItems, receivedItems } = calculateProgress(req);
+
+                          // Determinar última actualización según estado
+                          const getLastAction = () => {
+                            return { label: 'Recepción Completa', date: req.updatedAt };
+                          };
+
+                          const lastAction = getLastAction();
+
+                          return (
+                            <TableRow key={req.requisitionId} className="bg-white hover:bg-green-50/30 transition-colors">
+                              <TableCell className="font-mono font-semibold text-[hsl(var(--canalco-neutral-600))]">
+                                {req.requisitionNumber}
+                              </TableCell>
+                              <TableCell>
+                                <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-700))]">
+                                  {req.company?.name || '-'}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">
+                                  {req.obra || req.project?.name || '-'}
+                                </p>
+                              </TableCell>
+                              <TableCell className="text-center">
+                                <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-[hsl(var(--canalco-neutral-200))] text-[hsl(var(--canalco-neutral-600))] font-semibold text-sm">
+                                  {totalItems || 0}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-700))]">
+                                    {req.creator?.nombre || 'N/A'}
+                                  </p>
+                                  <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
+                                    {req.creator?.role?.nombreRol || '-'}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
+                                    {lastAction.label}
+                                  </p>
+                                  <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">
+                                    {formatDateShort(lastAction.date)}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant="outline"
+                                  className={`${STATUS_COLORS[req.status.code] || 'bg-gray-100'} border`}
+                                >
+                                  {getStatusLabel(req.status.code)}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {req.slaDeadline ? (
+                                  <div className="text-sm flex flex-col gap-0.5">
+                                    {req.isOverdue ? (
+                                      <>
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-red-600">❌</span>
+                                          <span className="text-red-600 font-medium">Vencida</span>
+                                        </div>
+                                        {req.daysOverdue > 0 && (
+                                          <span className="text-xs text-red-500">
+                                            Hace {req.daysOverdue} día{req.daysOverdue !== 1 ? 's' : ''}
+                                          </span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-green-600">✅</span>
+                                        <span className="text-green-600 font-medium">A tiempo</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-[hsl(var(--canalco-neutral-400))]">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-green-600">
+                                    {receivedItems} / {totalItems} ítems
+                                  </span>
+                                  <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full bg-green-600 transition-all"
+                                      style={{ width: '100%' }}
+                                    />
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center justify-center gap-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleRegisterReceipt(req)}
+                                    className="hover:bg-blue-50"
+                                    title="Ver recepción"
+                                  >
+                                    <Edit className="w-4 h-4 text-blue-600" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  {/* Paginación de sección completadas */}
+                  {processedTotalPages > 1 && (
+                    <div className="border-t border-[hsl(var(--canalco-neutral-200))] px-4 py-3 flex items-center justify-between bg-green-50/30">
+                      <p className="text-xs text-[hsl(var(--canalco-neutral-600))]">
+                        Mostrando {processedStartIndex + 1} - {Math.min(processedEndIndex, totalCompleted)} de {totalCompleted} completadas
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProcessedPage((p) => Math.max(1, p - 1))}
+                          disabled={processedPage === 1}
+                          className="h-8 text-xs"
+                        >
+                          Anterior
+                        </Button>
+                        <span className="text-xs text-[hsl(var(--canalco-neutral-700))]">
+                          Página {processedPage} de {processedTotalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProcessedPage((p) => Math.min(processedTotalPages, p + 1))}
+                          disabled={processedPage === processedTotalPages}
+                          className="h-8 text-xs"
+                        >
+                          Siguiente
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </main>

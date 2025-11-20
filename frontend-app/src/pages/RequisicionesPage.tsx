@@ -5,7 +5,7 @@ import { requisitionsService } from '@/services/requisitions.service';
 import type { Requisition, FilterRequisitionsParams } from '@/services/requisitions.service';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Home, Menu, Eye, Edit, AlertCircle, Plus, Lock, ArrowLeft } from 'lucide-react';
+import { Home, Menu, Eye, Edit, AlertCircle, Plus, Lock, ArrowLeft, CheckCircle } from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -15,6 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatDateShort } from '@/utils/dateUtils';
+import { RequisitionFilters, type FilterValues } from '@/components/ui/requisition-filters';
 
 // Mapeo de estados a colores
 const STATUS_COLORS: Record<string, string> = {
@@ -45,6 +46,32 @@ export default function RequisicionesPage() {
   const [total, setTotal] = useState(0);
   const limit = 10;
 
+  // Paginación para sección de procesadas (10 por página)
+  const [processedPage, setProcessedPage] = useState(1);
+  const processedLimit = 10;
+
+  // Filters state
+  const [filters, setFilters] = useState<FilterValues>({
+    requisitionNumber: '',
+    startDate: '',
+    endDate: '',
+    operationCenter: '',
+    status: '',
+    creatorName: '',
+  });
+
+  // Available statuses for the filter dropdown
+  const availableStatuses = [
+    { code: 'pendiente', name: 'Pendiente' },
+    { code: 'aprobada_revisor', name: 'Aprobada por Revisor' },
+    { code: 'rechazada_revisor', name: 'Rechazada por Revisor' },
+    { code: 'aprobada_gerencia', name: 'Aprobada' },
+    { code: 'rechazada_gerencia', name: 'Rechazada por Gerencia' },
+    { code: 'cotizada', name: 'Cotizada' },
+    { code: 'en_orden_compra', name: 'En Orden de Compra' },
+    { code: 'pendiente_recepcion', name: 'Pendiente de Recepción' },
+  ];
+
   // Check user permissions
   // Roles que NO pueden crear requisiciones
   const restrictedRoles = ['Gerencia', 'Compras'];
@@ -52,17 +79,23 @@ export default function RequisicionesPage() {
 
   useEffect(() => {
     loadRequisitions();
-  }, [page]);
+  }, [page, filters]);
 
   const loadRequisitions = async () => {
     try {
       setLoading(true);
       setError(null);
-      const filters: FilterRequisitionsParams = {
+
+      // Map filter values to API parameters
+      const params: FilterRequisitionsParams = {
         page,
         limit,
+        status: filters.status && filters.status !== 'all' ? filters.status : undefined,
+        fromDate: filters.startDate || undefined,
+        toDate: filters.endDate || undefined,
       };
-      const response = await requisitionsService.getMyRequisitions(filters);
+
+      const response = await requisitionsService.getMyRequisitions(params);
       setRequisitions(response.data);
       setTotal(response.total);
       setTotalPages(response.totalPages);
@@ -72,6 +105,11 @@ export default function RequisicionesPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleFilterChange = (newFilters: FilterValues) => {
+    setFilters(newFilters);
+    setPage(1); // Reset to first page when filters change
   };
 
   const handleView = (requisition: Requisition) => {
@@ -284,6 +322,15 @@ export default function RequisicionesPage() {
           </Button>
         </div>
 
+        {/* Filters */}
+        <div className="mb-6 bg-white rounded-lg border border-[hsl(var(--canalco-neutral-300))] overflow-hidden shadow-sm">
+          <RequisitionFilters
+            filters={filters}
+            onFiltersChange={setFilters}
+            availableStatuses={availableStatuses}
+          />
+        </div>
+
         {/* Loading State */}
         {loading && (
           <div className="flex items-center justify-center py-12">
@@ -300,31 +347,48 @@ export default function RequisicionesPage() {
         )}
 
         {/* Table */}
-        {!loading && !error && (
+        {!loading && !error && requisitions.length === 0 && (
+          <div className="bg-white rounded-lg shadow-md border border-[hsl(var(--canalco-neutral-300))] p-12 text-center">
+            <p className="text-[hsl(var(--canalco-neutral-600))]">
+              No tienes requisiciones creadas. Haz clic en "Crear nueva requisición" para comenzar.
+            </p>
+          </div>
+        )}
+
+        {!loading && !error && requisitions.length > 0 && (
           <div className="bg-white rounded-lg shadow-md border border-[hsl(var(--canalco-neutral-300))] overflow-hidden">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-[hsl(var(--canalco-neutral-100))]">
-                    <TableHead className="font-semibold w-[120px]">N° Requisición</TableHead>
-                    <TableHead className="font-semibold">Empresa</TableHead>
-                    <TableHead className="font-semibold">Proyecto/Obra</TableHead>
-                    <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
-                    <TableHead className="font-semibold">Creado por</TableHead>
-                    <TableHead className="font-semibold">Última Actualización</TableHead>
-                    <TableHead className="font-semibold">Estado</TableHead>
-                    <TableHead className="font-semibold text-center">Acciones</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {requisitions.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center py-12 text-[hsl(var(--canalco-neutral-600))]">
-                        No tienes requisiciones creadas. Haz clic en "Crear nueva requisición" para comenzar.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    requisitions.map((req) => {
+            {/* Pending Requisitions Section */}
+            {(() => {
+              const pendingRequisitions = requisitions.filter(r =>
+                ['pendiente', 'aprobada_revisor', 'rechazada_revisor', 'rechazada_gerencia'].includes(r.status?.code || '')
+              );
+
+              if (pendingRequisitions.length === 0) return null;
+
+              return (
+                <div>
+                  <div className="bg-orange-50 border-b border-orange-200 px-4 py-2">
+                    <p className="text-sm font-semibold text-orange-800 flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4" />
+                      EN PROCESO ({pendingRequisitions.length})
+                    </p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-[hsl(var(--canalco-neutral-100))]">
+                          <TableHead className="font-semibold w-[120px]">N° Requisición</TableHead>
+                          <TableHead className="font-semibold">Empresa</TableHead>
+                          <TableHead className="font-semibold">Proyecto/Obra</TableHead>
+                          <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
+                          <TableHead className="font-semibold">Solicitado por</TableHead>
+                          <TableHead className="font-semibold">Última Actualización</TableHead>
+                          <TableHead className="font-semibold">Estado</TableHead>
+                          <TableHead className="font-semibold text-center">Acciones</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {pendingRequisitions.map((req) => {
                       // Determinar la última acción según el estado
                       const getLastAction = () => {
                         switch (req.status.code) {
@@ -445,41 +509,183 @@ export default function RequisicionesPage() {
                           </TableCell>
                         </TableRow>
                       );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="border-t border-[hsl(var(--canalco-neutral-300))] p-4 flex items-center justify-between">
-                <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">
-                  Mostrando {(page - 1) * limit + 1} - {Math.min(page * limit, total)} de {total} requisiciones
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage(Math.max(1, page - 1))}
-                    disabled={page === 1}
-                  >
-                    Anterior
-                  </Button>
-                  <span className="text-sm text-[hsl(var(--canalco-neutral-700))]">
-                    Página {page} de {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage(Math.min(totalPages, page + 1))}
-                    disabled={page === totalPages}
-                  >
-                    Siguiente
-                  </Button>
+                    })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
+
+            {/* Processed Requisitions Section */}
+            {(() => {
+              const processedRequisitions = requisitions.filter(r =>
+                ['aprobada_gerencia', 'cotizada', 'en_orden_compra', 'pendiente_recepcion'].includes(r.status?.code || '')
+              );
+
+              if (processedRequisitions.length === 0) return null;
+
+              // Paginación interna: 10 por página
+              const totalProcessed = processedRequisitions.length;
+              const processedTotalPages = Math.ceil(totalProcessed / processedLimit);
+              const processedStartIndex = (processedPage - 1) * processedLimit;
+              const processedEndIndex = processedStartIndex + processedLimit;
+              const paginatedProcessedRequisitions = processedRequisitions.slice(processedStartIndex, processedEndIndex);
+
+              return (
+                <div className={requisitions.filter(r => ['pendiente', 'aprobada_revisor', 'rechazada_revisor', 'rechazada_gerencia'].includes(r.status?.code || '')).length > 0 ? 'border-t-4 border-[hsl(var(--canalco-neutral-200))]' : ''}>
+                  <div className="bg-green-50 border-b border-green-200 px-4 py-2">
+                    <p className="text-sm font-semibold text-green-800 flex items-center gap-2">
+                      <CheckCircle className="h-4 w-4" />
+                      YA PROCESADAS ({processedRequisitions.length})
+                    </p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-[hsl(var(--canalco-neutral-100))]">
+                          <TableHead className="font-semibold w-[120px]">N° Requisición</TableHead>
+                          <TableHead className="font-semibold">Empresa</TableHead>
+                          <TableHead className="font-semibold">Proyecto/Obra</TableHead>
+                          <TableHead className="font-semibold w-[80px]">Ítems</TableHead>
+                          <TableHead className="font-semibold">Solicitado por</TableHead>
+                          <TableHead className="font-semibold">Última Actualización</TableHead>
+                          <TableHead className="font-semibold">Estado</TableHead>
+                          <TableHead className="font-semibold text-center">Acciones</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedProcessedRequisitions.map((req) => {
+                          // Determinar la última acción según el estado
+                          const getLastAction = () => {
+                            switch (req.status.code) {
+                              case 'aprobada_gerencia':
+                                return { label: 'Aprobada (Gerencia)', date: req.approvedAt || req.updatedAt };
+                              case 'cotizada':
+                                return { label: 'Cotizada', date: req.updatedAt };
+                              case 'en_orden_compra':
+                                return { label: 'En Orden de Compra', date: req.updatedAt };
+                              case 'pendiente_recepcion':
+                                return { label: 'Pendiente de Recepción', date: req.updatedAt };
+                              default:
+                                return { label: 'Actualizada', date: req.updatedAt };
+                            }
+                          };
+
+                          const lastAction = getLastAction();
+
+                          return (
+                            <TableRow key={req.requisitionId} className="bg-white hover:bg-green-50/30 transition-colors">
+                              <TableCell className="font-mono font-semibold text-[hsl(var(--canalco-neutral-600))]">
+                                {req.requisitionNumber}
+                              </TableCell>
+                              <TableCell>
+                                <p className="font-medium text-[hsl(var(--canalco-neutral-700))]">
+                                  {req.company?.name || '-'}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                {req.project ? (
+                                  <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">{req.project.name}</p>
+                                ) : req.obra ? (
+                                  <p className="text-sm text-[hsl(var(--canalco-neutral-600))]">{req.obra}</p>
+                                ) : (
+                                  <p className="text-xs text-[hsl(var(--canalco-neutral-400))]">-</p>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-center">
+                                <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-[hsl(var(--canalco-neutral-200))] text-[hsl(var(--canalco-neutral-600))] font-semibold text-sm">
+                                  {req.items?.length || 0}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                <div>
+                                  <p className="text-sm font-medium text-[hsl(var(--canalco-neutral-700))]">
+                                    {req.creator?.nombre || 'N/A'}
+                                  </p>
+                                  <p className="text-xs text-[hsl(var(--canalco-neutral-500))]">
+                                    {req.creator?.role?.nombreRol || 'Sin rol'}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-sm text-[hsl(var(--canalco-neutral-600))]">
+                                <div>
+                                  <p className="font-medium">{lastAction.label}</p>
+                                  <p className="text-xs">{formatDateShort(lastAction.date)}</p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant="outline"
+                                  className={`${STATUS_COLORS[req.status.code] || 'bg-gray-100'} border`}
+                                >
+                                  {getStatusLabel(req.status.code)}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center justify-center gap-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleView(req)}
+                                    className="hover:bg-blue-50"
+                                    title="Ver detalles"
+                                  >
+                                    <Eye className="w-4 h-4 text-blue-600" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleEdit(req)}
+                                    className="opacity-50 cursor-not-allowed"
+                                    title="No se puede editar"
+                                    disabled
+                                  >
+                                    <Edit className="w-4 h-4 text-orange-600" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  {/* Paginación de sección procesadas */}
+                  {processedTotalPages > 1 && (
+                    <div className="border-t border-[hsl(var(--canalco-neutral-200))] px-4 py-3 flex items-center justify-between bg-green-50/30">
+                      <p className="text-xs text-[hsl(var(--canalco-neutral-600))]">
+                        Mostrando {processedStartIndex + 1} - {Math.min(processedEndIndex, totalProcessed)} de {totalProcessed} procesadas
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProcessedPage((p) => Math.max(1, p - 1))}
+                          disabled={processedPage === 1}
+                          className="h-8 text-xs"
+                        >
+                          Anterior
+                        </Button>
+                        <span className="text-xs text-[hsl(var(--canalco-neutral-700))]">
+                          Página {processedPage} de {processedTotalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setProcessedPage((p) => Math.min(processedTotalPages, p + 1))}
+                          disabled={processedPage === processedTotalPages}
+                          className="h-8 text-xs"
+                        >
+                          Siguiente
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </main>

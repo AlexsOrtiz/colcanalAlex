@@ -75,12 +75,14 @@ export default function ComprasPage() {
         return canReviewRoles.includes(userRole);
 
       case 'aprobacion':
-        // Only Gerencia can approve
+      case 'aprobacion-ordenes':
+        // Only Gerencia can approve requisitions and purchase orders
         return userRole === 'Gerencia';
 
       case 'cotizaciones':
       case 'ordenes-compra':
-        // Only Compras can quote and manage purchase orders
+      case 'facturas':
+        // Only Compras can quote, manage purchase orders, and manage invoices
         return userRole === 'Compras';
 
       case 'recepciones':
@@ -110,7 +112,7 @@ export default function ComprasPage() {
     },
     {
       gestionId: 103,
-      nombre: 'Aprobación',
+      nombre: 'Aprobar Requisiciones',
       slug: 'aprobacion',
       icono: 'CheckCircle2',
       hasAccess: getSubModuleAccess('aprobacion'),
@@ -128,6 +130,20 @@ export default function ComprasPage() {
       slug: 'ordenes-compra',
       icono: 'ShoppingBag',
       hasAccess: getSubModuleAccess('ordenes-compra'),
+    },
+    {
+      gestionId: 108,
+      nombre: 'Gestión de Facturas',
+      slug: 'facturas',
+      icono: 'FileText',
+      hasAccess: getSubModuleAccess('facturas'),
+    },
+    {
+      gestionId: 107,
+      nombre: 'Aprobar Órdenes de Compra',
+      slug: 'aprobacion-ordenes',
+      icono: 'CheckCheck',
+      hasAccess: getSubModuleAccess('aprobacion-ordenes'),
     },
     {
       gestionId: 106,
@@ -150,10 +166,14 @@ export default function ComprasPage() {
       navigate('/dashboard/compras/requisiciones');
     } else if (subModule.slug === 'revision' || subModule.slug === 'aprobacion') {
       navigate('/dashboard/compras/requisiciones/revisar');
+    } else if (subModule.slug === 'aprobacion-ordenes') {
+      navigate('/dashboard/compras/ordenes-compra/aprobar');
     } else if (subModule.slug === 'cotizaciones') {
       navigate('/dashboard/compras/cotizaciones');
     } else if (subModule.slug === 'ordenes-compra') {
       navigate('/dashboard/compras/ordenes');
+    } else if (subModule.slug === 'facturas') {
+      navigate('/dashboard/compras/facturas');
     } else if (subModule.slug === 'recepciones') {
       navigate('/dashboard/compras/recepciones');
     } else {
