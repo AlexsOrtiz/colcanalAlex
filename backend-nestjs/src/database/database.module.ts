@@ -8,20 +8,27 @@ import * as entities from './entities';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get('database.host'),
-        port: configService.get('database.port'),
-        username: configService.get('database.username'),
-        password: configService.get('database.password'),
-        database: configService.get('database.database'),
-        entities: Object.values(entities),
-        synchronize: true, // ⚠️ TEMPORAL - Cambiado a true para crear tablas iniciales
-        logging: configService.get('nodeEnv') === 'development',
-        migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
-        migrationsRun: false,
-        ssl: configService.get('nodeEnv') === 'production' ? { rejectUnauthorized: false } : false,
-      }),
+      useFactory: (configService: ConfigService) => {
+        const host = configService.get('database.host');
+        const isProduction = configService.get('nodeEnv') === 'production';
+        const isRenderDB = host?.includes('render.com');
+
+        return {
+          type: 'postgres',
+          host,
+          port: configService.get('database.port'),
+          username: configService.get('database.username'),
+          password: configService.get('database.password'),
+          database: configService.get('database.database'),
+          entities: Object.values(entities),
+          synchronize: true, // ⚠️ TEMPORAL - Cambiado a true para crear tablas iniciales
+          logging: !isProduction,
+          migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
+          migrationsRun: false,
+          // Activar SSL si es producción O si el host es de Render
+          ssl: (isProduction || isRenderDB) ? { rejectUnauthorized: false } : false,
+        };
+      },
     }),
   ],
 })
