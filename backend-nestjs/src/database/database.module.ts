@@ -26,10 +26,10 @@ import * as entities from './entities';
           migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
           migrationsRun: false,
           // Activar SSL si es producción O si el host es de Render
-          ssl: (isProduction || isRenderDB) ? { rejectUnauthorized: false } : false,
+          ssl: { rejectUnauthorized: false },
         };
       },
     }),
   ],
 })
-export class DatabaseModule {}
+export class DatabaseModule { }
